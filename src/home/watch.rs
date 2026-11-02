@@ -6,11 +6,16 @@
 //! the remote; a reply has to say so rather than claim it's playing.
 //!
 //! The YouTube lookup is the one thing home sends off the network: the
-//! title being asked for, to youtube.com, when someone asks for it.
+//! title being asked for, to youtube.com, and only once `/home lookups on`
+//! has allowed it. With lookups off, YouTube gets a search link instead.
 
+use std::cell::Cell;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 const LOOKUP: Duration = Duration::from_secs(6);
+/// More than any answer needs; what comes back is a stranger's.
+const MAX_PAGE: u64 = 4 * 1024 * 1024;
 /// YouTube's own filter for videos alone, so no channel or playlist comes
 /// first.
 const VIDEOS_ONLY: &str = "EgIQAQ%253D%253D";
@@ -24,6 +29,43 @@ const SEARCHES: &[(&str, &str, &str)] = &[
     ("disney", "Disney+", "https://www.disneyplus.com/search?q="),
     ("spotify", "Spotify", "spotify:search:"),
 ];
+
+/// Turns a request for a title into a [`Pick`], going off the network if
+/// lookups are on. Asking it is what sends the title away, so a driver asks
+/// only once it knows the TV can use the answer.
+pub struct Finder {
+    results: Option<fn(&str) -> Option<String>>,
+    missed: Cell<bool>,
+}
+
+impl Finder {
+    /// `lookups` is the household's say on sending titles off the network.
+    pub fn new(lookups: bool) -> Finder {
+        Finder { results: lookups.then_some(youtube_results), missed: Cell::new(false) }
+    }
+
+    /// Where to go for `what` in `app`, or `None` for an app that only
+    /// opens. Can take a few seconds, and sends `what` to youtube.com.
+    pub fn find(&self, app: &str, what: &str) -> Option<Pick> {
+        pick_with(app, what, |what| {
+            let page = self.results?(what)?;
+            let video = first_video(&page);
+            self.missed.set(video.is_none());
+            video
+        })
+    }
+
+    /// Whether a results page came back with no video on it, which is what
+    /// YouTube changing its page looks like.
+    pub fn missed(&self) -> bool {
+        self.missed.get()
+    }
+
+    #[cfg(test)]
+    pub fn with(results: fn(&str) -> Option<String>) -> Finder {
+        Finder { results: Some(results), missed: Cell::new(false) }
+    }
+}
 
 /// Where a request for a title ended up.
 #[derive(Debug, PartialEq)]
@@ -41,11 +83,19 @@ impl Pick {
         }
     }
 
+    /// The video to name to a TV that takes an id rather than a link.
+    pub fn youtube_video(&self) -> Option<&str> {
+        match self {
+            Pick::Video { id, .. } => Some(id),
+            Pick::Search { .. } => None,
+        }
+    }
+
     /// What to tell the model, which repeats it to the household.
     pub fn said(&self, what: &str) -> String {
         match self {
             Pick::Video { music: true, .. } => format!("sent the top YouTube match for {what} to YouTube Music"),
-            Pick::Video { .. } => format!("sent the top YouTube match for {what} to YouTube"),
+            Pick::Video { .. } => sent_to_youtube(what),
             Pick::Search { app, .. } => {
                 format!("{app} was sent a search for {what}; nothing plays until someone picks a result")
             }
@@ -53,14 +103,14 @@ impl Pick {
     }
 }
 
+/// What to say when a video went to YouTube itself.
+pub fn sent_to_youtube(what: &str) -> String {
+    format!("sent the top YouTube match for {what} to YouTube")
+}
+
 /// What to say when `app` can only be opened.
 pub fn only_opened(app: &str, what: &str) -> String {
     format!("opened {app}, but can't tell it to play {what}; nothing is playing yet, so someone has to find it there")
-}
-
-/// Where to go for `what` in `app`, or `None` for an app that only opens.
-pub fn pick(app: &str, what: &str) -> Option<Pick> {
-    pick_with(app, what, youtube_video)
 }
 
 fn pick_with(app: &str, what: &str, video: impl Fn(&str) -> Option<String>) -> Option<Pick> {
@@ -77,7 +127,8 @@ fn pick_with(app: &str, what: &str, video: impl Fn(&str) -> Option<String>) -> O
     }
     SEARCHES
         .iter()
-        .find(|(name, ..)| spoken.contains(name))
+        // Amazon Music isn't Prime Video.
+        .find(|(name, ..)| spoken.contains(name) && !spoken.contains("music"))
         .map(|(_, app, link)| Pick::Search { link: format!("{link}{query}"), app })
 }
 
@@ -94,15 +145,22 @@ fn encode(text: &str) -> String {
     })
 }
 
-/// The top video YouTube has for `what`, if it can be reached.
-fn youtube_video(what: &str) -> Option<String> {
-    let tls = ureq::tls::TlsConfig::builder()
-        .provider(ureq::tls::TlsProvider::NativeTls)
-        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
-        .build();
-    let agent: ureq::Agent = ureq::Agent::config_builder().tls_config(tls).timeout_global(Some(LOOKUP)).build().new_agent();
+/// One client for every lookup.
+fn agent() -> &'static ureq::Agent {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT.get_or_init(|| {
+        let tls = ureq::tls::TlsConfig::builder()
+            .provider(ureq::tls::TlsProvider::NativeTls)
+            .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+            .build();
+        ureq::Agent::config_builder().tls_config(tls).timeout_global(Some(LOOKUP)).build().new_agent()
+    })
+}
+
+/// YouTube's results page for `what`, if it can be reached.
+fn youtube_results(what: &str) -> Option<String> {
     let url = format!("https://www.youtube.com/results?search_query={}&sp={VIDEOS_ONLY}", encode(what));
-    let mut page = agent
+    let mut page = agent()
         .get(url)
         .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0 Safari/537.36")
         .header("Accept-Language", "en")
@@ -110,7 +168,7 @@ fn youtube_video(what: &str) -> Option<String> {
         .header("Cookie", "SOCS=CAI")
         .call()
         .ok()?;
-    first_video(&page.body_mut().read_to_string().ok()?)
+    page.body_mut().with_config().limit(MAX_PAGE).read_to_string().ok()
 }
 
 /// The first video on a results page. The page is a stranger's, so only
@@ -174,8 +232,31 @@ mod tests {
     #[test]
     #[ignore]
     fn finds_a_real_video() {
-        let id = youtube_video("Ithinno Aadame").expect("a video");
+        let id = first_video(&youtube_results("Ithinno Aadame").expect("a page")).expect("a video");
         println!("{id}");
+    }
+
+    #[test]
+    fn lookups_off_keeps_the_title_home() {
+        let off = Finder::new(false);
+        assert!(matches!(off.find("youtube", "x"), Some(Pick::Search { .. })));
+        assert!(!off.missed());
+    }
+
+    #[test]
+    fn a_page_with_no_video_is_noticed() {
+        let lost = Finder::with(|_| Some("<html>something new</html>".into()));
+        assert!(matches!(lost.find("youtube", "x"), Some(Pick::Search { .. })));
+        assert!(lost.missed());
+        let unreachable = Finder::with(|_| None);
+        unreachable.find("youtube", "x");
+        assert!(!unreachable.missed(), "being offline isn't YouTube changing");
+    }
+
+    #[test]
+    fn amazon_music_is_not_prime_video() {
+        assert_eq!(pick_with("amazon music", "x", found), None);
+        assert!(pick_with("amazon", "x", found).is_some());
     }
 
     #[test]

@@ -17,7 +17,7 @@
 
 hopchat is a terminal chat app built on the [Offline Protocol SDK](https://github.com/Offline-Protocol/offline-protocol-sdk) and [ratatui](https://ratatui.rs). Peers on the same network find each other on their own, and every conversation is end-to-end encrypted with MLS (RFC 9420).
 
-It's also a remote control for the room you're in. Mention `@home` to dim the lights or put something on the TV, and `@ai` to ask a local model. One person's model can answer for the whole group. Nothing leaves your network, except a title you ask the TV to play on YouTube, which is looked up on youtube.com.
+It's also a remote control for the room you're in. Mention `@home` to dim the lights or put something on the TV, and `@ai` to ask a local model. One person's model can answer for the whole group, and nothing leaves your network unless you turn on title lookups with `/home lookups on`.
 
 ## Table of contents
 
@@ -266,6 +266,8 @@ A local model turns the request into device actions, and home replies in the con
    - The panel also shows whether the model is ready, and the exact command to run if it isn't.
 3. To let others in a group or the lobby use your devices, press `g` in the panel or type `/home on` there. `/home off` revokes it.
 
+**Playing a title.** With `/home lookups on`, a title asked for on YouTube is sent from this machine to youtube.com and the top video starts on the TV. That covers `@home play X` with no app named, because YouTube is the default. With lookups off, which is the default, nothing is sent and the TV shows a YouTube search where it can take a link.
+
 If a device is on another subnet, add it with `/home add 192.168.1.40`. `/home scan` searches again, and a bare `/home` shows the current status.
 
 **Tuya lights.** Wipro bulbs and most other white-label Wi-Fi bulbs are Tuya devices, and hopchat drives them directly over your LAN. Each bulb encrypts with a local key issued by its Tuya cloud account, so getting that key once is the only step that needs the internet. Link the bulb's app to a project on the [Tuya IoT platform](https://platform.tuya.com) and run the [tinytuya](https://github.com/jasonacox/tinytuya) wizard, which lists each device's ID and local key. Then add each bulb with `/home tuya IP DEVICE_ID LOCAL_KEY`. Scanning finds any device with Tuya's port 6668 open and shows it in the panel with its address, and plugs and other devices that aren't dimmable lights are refused when you add them. Protocol versions 3.3, 3.4 and 3.5 work, and hopchat works out which one a bulb speaks. Resetting a bulb or re-adding it in its app changes its key: press `x` on it in `/devices` and add it again. The key is kept in `home.json`, like the Home Assistant token below. Tuya support is tested against tinytuya's encoding and a stand-in bulb, and hasn't been tried on a real one yet.
@@ -369,6 +371,7 @@ Without `--to`, `--say` and `--file` go to the first peer whose secure session c
 | `/home ha URL TOKEN` | connect Home Assistant and list its devices |
 | `/home ha find` | look for a Home Assistant announcing itself, and say its address |
 | `/home ha forget` | disconnect Home Assistant and remove its devices |
+| `/home lookups on\|off` | let titles asked for on the TV be looked up on the internet; off by default |
 | `/home model NAME` | choose the Ollama model |
 | `/ai on\|off` | let everyone here ask your model, or stop |
 | `/ai forget` | clear this conversation's model memory |

@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
-use super::watch::{self, Pick};
+use super::watch::{self, Finder, Pick};
 
 use super::discover::{self, format_mac, mac_of, parse_mac};
 use super::driver::{Backend, Category, Found, PairHelp};
@@ -435,8 +435,8 @@ impl TvDriver for WebOs {
         session(d, |s| launch(s, app))
     }
 
-    fn play(&self, d: &mut Device, app: &str, what: &str) -> Result<String, String> {
-        session(d, |s| play(s, app, what))
+    fn play(&self, d: &mut Device, app: &str, what: &str, find: &Finder) -> Result<String, String> {
+        session(d, |s| play(s, app, what, find))
     }
 
     fn input(&self, d: &mut Device, wanted: &str) -> Result<String, String> {
@@ -518,10 +518,11 @@ pub fn launch(s: &mut Session, app: &str) -> Result<String, String> {
 }
 
 /// webOS apps take no link, so only a YouTube video can be named to one.
-fn play(s: &mut Session, app: &str, what: &str) -> Result<String, String> {
-    if let Some(video @ Pick::Video { id, music: false, .. }) = &watch::pick(app, what) {
-        s.request("ssap://system.launcher/launch", youtube_launch(id))?;
-        return Ok(video.said(what));
+/// YouTube Music has no app of its own here, so its songs go to YouTube.
+fn play(s: &mut Session, app: &str, what: &str, find: &Finder) -> Result<String, String> {
+    if let Some(video) = find.find(app, what).as_ref().and_then(Pick::youtube_video) {
+        s.request("ssap://system.launcher/launch", youtube_launch(video))?;
+        return Ok(watch::sent_to_youtube(what));
     }
     launch(s, app)?;
     Ok(watch::only_opened(app, what))

@@ -33,7 +33,7 @@ use x509_cert::time::Validity;
 use super::discover::{self, format_mac, mac_of, parse_mac};
 use super::driver::{Backend, Category, Found, PairHelp};
 use super::tv::TvDriver;
-use super::watch;
+use super::watch::{self, Finder};
 use super::{Device, State};
 
 const REMOTE_PORT: u16 = 6466;
@@ -870,8 +870,8 @@ impl TvDriver for AndroidTv {
 
     /// A link can start a YouTube video or search some other apps; the
     /// rest only open.
-    fn play(&self, d: &mut Device, app: &str, what: &str) -> Result<String, String> {
-        if let Some(pick) = watch::pick(app, what) {
+    fn play(&self, d: &mut Device, app: &str, what: &str, find: &Finder) -> Result<String, String> {
+        if let Some(pick) = find.find(app, what) {
             remote_of(d)?.launch(pick.link())?;
             return Ok(pick.said(what));
         }

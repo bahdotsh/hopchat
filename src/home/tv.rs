@@ -8,7 +8,11 @@ use serde_json::{json, Value};
 
 use super::assistant::{flag, number, text, tool};
 use super::driver::backend_of;
+use super::watch::Finder;
 use super::{Device, Home};
+
+/// The longest title sent anywhere; the model can say what it likes.
+const MAX_TITLE: usize = 200;
 
 pub trait TvDriver: Sync {
     fn power(&self, d: &mut Device, on: bool) -> Result<String, String>;
@@ -20,7 +24,7 @@ pub trait TvDriver: Sync {
     }
     /// Puts on `what` in `app`, as far as the TV lets it, and says how far
     /// that was.
-    fn play(&self, d: &mut Device, _app: &str, _what: &str) -> Result<String, String> {
+    fn play(&self, d: &mut Device, _app: &str, _what: &str, _find: &Finder) -> Result<String, String> {
         Err(format!("{} can't play a chosen title", d.name))
     }
     fn input(&self, d: &mut Device, _input: &str) -> Result<String, String> {
@@ -115,8 +119,14 @@ impl Home {
             },
             "tv_play" => match text(args, "what") {
                 Some(what) => {
+                    let what: String = what.chars().take(MAX_TITLE).collect();
                     let app = text(args, "app").unwrap_or_else(|| "YouTube".into());
-                    self.on_tv(args, |tv, d| tv.play(d, &app, &what))
+                    let find = Finder::new(self.config.lookups);
+                    let played = self.on_tv(args, |tv, d| tv.play(d, &app, &what, &find));
+                    if find.missed() {
+                        self.note("home: YouTube's results page had no video on it; its layout may have changed".into());
+                    }
+                    played
                 }
                 None => Err("play what?".into()),
             },
