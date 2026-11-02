@@ -277,6 +277,7 @@ const PAIR_HELP: PairHelp = PairHelp {
         " pairs it. The TV will ask to allow hopchat; have the remote ready.",
         "For \"turn the TV on\" to work, enable Turn on via Wi-Fi in its settings.",
     ],
+    takes: PAIRING,
     during: [
         "Look at the TV: it's asking whether to allow hopchat.",
         "Choose Allow with the remote. Nothing to do here.",

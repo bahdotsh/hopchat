@@ -45,6 +45,8 @@ const HELLO: Duration = Duration::from_secs(5);
 const TICK: Duration = Duration::from_millis(200);
 /// How long someone has to read the code off the TV and type it.
 const PAIRING: Duration = Duration::from_secs(60);
+/// All of a pairing: the code, then the TV taking its time to trust us.
+const PAIRING_TAKES: Duration = Duration::from_secs(90);
 /// How long a scan listens for TVs announcing themselves.
 const DISCOVER: Duration = Duration::from_secs(3);
 /// How long to wait for the TV to report a change it was asked for.
@@ -731,6 +733,7 @@ fn pair_at(d: &mut Device, pair: SocketAddr, remote: SocketAddr) -> Result<Strin
 const PAIR_HELP: PairHelp = PairHelp {
     before: [" pairs it. The TV will show a code to type here.", "Keep the TV on and in view while it pairs."],
     during: ["Type the code on the TV: /home code CODE", "It's six letters and digits; the TV shows it for a minute."],
+    takes: PAIRING_TAKES,
 };
 
 fn found(ip: Ipv4Addr, name: Option<String>) -> Found {

@@ -56,9 +56,6 @@ pub const MENTION: &str = "@home";
 pub const SIGNATURE: &str = "🏠 ";
 const MAX_REQUEST_CHARS: usize = 500;
 const MAX_NAME_CHARS: usize = 32;
-/// How long a device waits for someone to allow pairing, as a TV shows its
-/// "allow this device?" prompt.
-const PAIRING: Duration = Duration::from_secs(60);
 /// How often to look again at whether the model is ready, so one started
 /// later is used and offered.
 const MODEL_CHECK: Duration = Duration::from_secs(30);
@@ -834,7 +831,7 @@ impl Home {
         };
         let Some(d) = candidate else { return };
         let Some(backend) = backend_of(&d) else { return };
-        if backend.pairing().is_none() {
+        let Some(help) = backend.pairing() else {
             self.found.retain(|f| f.id() != id);
             let name = d.name.clone();
             self.config.devices.push(d.clone());
@@ -842,11 +839,11 @@ impl Home {
             self.live.insert(d.id(), (State::Checking, String::new()));
             self.check(d);
             return self.note(format!("added {name}"));
-        }
+        };
         if matches!(self.live.get(id), Some((State::Pairing { .. }, _))) {
             return;
         }
-        self.live.insert(d.id(), (State::Pairing { until: Instant::now() + PAIRING }, String::new()));
+        self.live.insert(d.id(), (State::Pairing { until: Instant::now() + help.takes }, String::new()));
         let me = self.me.clone();
         thread::spawn(move || {
             let id = d.id();

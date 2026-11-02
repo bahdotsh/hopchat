@@ -723,6 +723,7 @@ const PAIR_HELP: PairHelp = PairHelp {
         "Type /home tuya IP DEVICE_ID LOCAL_KEY to add one with its key.",
     ],
     during: ["Trying that device ID and key…", "The light itself needs nothing done to it."],
+    takes: Duration::from_secs(60),
 };
 
 fn found(ip: Ipv4Addr) -> Found {

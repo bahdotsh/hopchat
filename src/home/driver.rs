@@ -108,6 +108,8 @@ pub struct PairHelp {
     pub before: [&'static str; 2],
     /// While it pairs: what to do on the device.
     pub during: [&'static str; 2],
+    /// How long a pairing can run, for the panel's countdown.
+    pub takes: std::time::Duration,
 }
 
 pub trait Backend: Sync {
