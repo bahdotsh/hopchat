@@ -7,6 +7,7 @@ mod groups;
 mod picker;
 mod recall;
 mod render;
+mod selection;
 mod tasks;
 pub mod theme;
 
@@ -22,7 +23,8 @@ use ratatui::crossterm::event::{
     self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
     MouseEvent, MouseEventKind,
 };
-use ratatui::layout::Rect;
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Position, Rect};
 use ratatui::text::Line;
 use ratatui::DefaultTerminal;
 
@@ -36,6 +38,7 @@ use editor::Editor;
 use groups::{Candidate, GroupPanel};
 use picker::{Outcome, Picker};
 use recall::Recall;
+use selection::Selection;
 use tasks::TaskPanel;
 
 const LOG_LINES: usize = 300;
@@ -145,6 +148,10 @@ pub struct App {
     pub new_group_row: Rect,
     pub chat_area: Rect,
     pub composer_area: Rect,
+    /// The protocol log's text, when it is showing.
+    pub log_area: Rect,
+    /// Text being dragged over, or just copied.
+    selection: Option<Selection>,
     /// The footer's key buttons, and the key each one presses.
     pub footer_hits: Vec<(Rect, KeyEvent)>,
     /// Screen row → the message drawn on it.
@@ -221,6 +228,8 @@ impl App {
             new_group_row: Rect::default(),
             chat_area: Rect::default(),
             composer_area: Rect::default(),
+            log_area: Rect::default(),
+            selection: None,
             footer_hits: Vec::new(),
             message_rows: Vec::new(),
             boot: None,
@@ -283,6 +292,7 @@ impl App {
                         TermEvent::Mouse(mouse) => self.on_mouse(mouse, &send),
                         TermEvent::FocusGained => self.focused = true,
                         TermEvent::FocusLost => self.focused = false,
+                        TermEvent::Resize(..) => self.selection = None,
                         _ => {}
                     }
                     if self.quit || !event::poll(Duration::ZERO)? {
@@ -909,6 +919,7 @@ impl App {
     // ----- input -----------------------------------------------------------
 
     fn on_key(&mut self, key: KeyEvent, send: &impl Fn(Command)) {
+        self.selection = None;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         // Any key gets past the boot screen, and does nothing else.
@@ -1347,6 +1358,11 @@ impl App {
             }
             return;
         }
+        let at = Position::new(mouse.column, mouse.row);
+        if matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
+            // The text moves; what was selected would not move with it.
+            self.selection = None;
+        }
         match mouse.kind {
             MouseEventKind::ScrollUp => match &mut self.mode {
                 Mode::Picker(p) => p.up(),
@@ -1363,6 +1379,7 @@ impl App {
                 _ => {}
             },
             MouseEventKind::Down(MouseButton::Left) => {
+                self.selection = None;
                 // The keys along the bottom are buttons, whatever is open.
                 let key = self.footer_hits.iter().find(|(r, _)| inside(*r)).map(|(_, k)| *k);
                 if let Some(key) = key {
@@ -1384,20 +1401,61 @@ impl App {
                 } else if inside(self.composer_area) {
                     self.mode = Mode::Normal;
                 } else if inside(self.chat_area) {
-                    // A click on a message picks it, for reply, open, copy…
-                    let at = self.message_rows.iter().find(|(y, _)| *y == mouse.row).map(|(_, i)| *i);
-                    let picked = at.and_then(|i| {
-                        let convo = self.current()?;
-                        selectable(convo, i, 0).filter(|&j| j == i)
-                    });
-                    self.mode = match (picked, &self.mode) {
-                        (Some(i), Mode::Select(j)) if i == *j => Mode::Normal,
-                        (Some(i), _) => Mode::Select(i),
-                        (None, _) => Mode::Normal,
-                    };
+                    // A click or the start of a drag: the release tells.
+                    self.selection = Some(Selection::new(at, self.chat_area));
+                } else if inside(self.log_area) {
+                    self.selection = Some(Selection::new(at, self.log_area));
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some(selection) = &mut self.selection {
+                    selection.drag_to(at);
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                let Some(selection) = &mut self.selection else { return };
+                let anchor = selection.anchor();
+                if selection.dragged {
+                    selection.copy = true;
+                    return;
+                }
+                self.selection = None;
+                if self.chat_area.contains(anchor) {
+                    self.click_message(anchor.y);
                 }
             }
             _ => {}
+        }
+    }
+
+    /// A click on a message picks it, for reply, open, copy…
+    fn click_message(&mut self, row: u16) {
+        let at = self.message_rows.iter().find(|(y, _)| *y == row).map(|(_, i)| *i);
+        let picked = at.and_then(|i| {
+            let convo = self.current()?;
+            selectable(convo, i, 0).filter(|&j| j == i)
+        });
+        self.mode = match (picked, &self.mode) {
+            (Some(i), Mode::Select(j)) if i == *j => Mode::Normal,
+            (Some(i), _) => Mode::Select(i),
+            (None, _) => Mode::Normal,
+        };
+    }
+
+    /// Shows the selection over a finished frame, and copies it once it has
+    /// been released: the frame is where its text is.
+    fn finish_selection(&mut self, buffer: &mut Buffer) {
+        let Some(selection) = &mut self.selection else { return };
+        selection.paint(buffer);
+        if !std::mem::take(&mut selection.copy) {
+            return;
+        }
+        let text = selection.text(buffer);
+        if text.is_empty() {
+            self.selection = None;
+        } else {
+            copy_to_clipboard(&text);
+            self.flash("copied to clipboard");
         }
     }
 
@@ -2140,11 +2198,29 @@ fn notify(title: &str, body: &str) {
 }
 
 /// OSC 52: the terminal puts it on the system clipboard, even over SSH.
+/// Terminal.app ignores that, so on a Mac's own screen pbcopy does it too.
 fn copy_to_clipboard(text: &str) {
+    if cfg!(test) {
+        return;
+    }
+    if cfg!(target_os = "macos") && std::env::var_os("SSH_TTY").is_none() {
+        pbcopy(text);
+    }
     let encoded = base64::engine::general_purpose::STANDARD.encode(text);
     let mut out = std::io::stdout();
     let _ = write!(out, "\x1b]52;c;{encoded}\x07");
     let _ = out.flush();
+}
+
+fn pbcopy(text: &str) {
+    use std::process::{Command, Stdio};
+    let child = Command::new("pbcopy").stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+    if let Ok(mut child) = child {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        let _ = child.wait();
+    }
 }
 
 #[cfg(test)]
@@ -2498,11 +2574,45 @@ mod render_tests {
             modifiers: KeyModifiers::NONE,
         };
         let first = click(row);
+        let release = MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), ..first };
         app.on_mouse(first, &send);
+        app.on_mouse(release, &send);
         assert!(matches!(app.mode, Mode::Select(0)));
         assert!(screen(&mut app).contains(" reply "), "the footer offers what to do with it");
         app.on_mouse(first, &send);
+        app.on_mouse(release, &send);
         assert!(matches!(app.mode, Mode::Normal), "a second click lets go");
+    }
+
+    #[test]
+    fn dragging_over_a_message_copies_it_instead_of_picking_it() {
+        let mut app = test_app();
+        let send = |_: Command| {};
+        let bob = "off1bob00000000000000";
+        let convo = app.convo_mut(bob);
+        convo.data.nick = "bob".into();
+        convo.push(text("m1", false, "first", Status::Sent));
+        app.selected = Some(bob.into());
+        screen(&mut app);
+        let (row, _) = *app.message_rows.last().unwrap();
+        let event = |kind, column| MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE };
+        let left = app.chat_area.x;
+        let right = left + app.chat_area.width - 1;
+        app.on_mouse(event(MouseEventKind::Down(MouseButton::Left), left), &send);
+        app.on_mouse(event(MouseEventKind::Drag(MouseButton::Left), right), &send);
+        app.on_mouse(event(MouseEventKind::Up(MouseButton::Left), right), &send);
+        assert!(matches!(app.mode, Mode::Normal), "a drag picks nothing");
+        assert!(app.selection.as_ref().is_some_and(|s| s.copy));
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(app.selection.as_ref().map(|s| s.text(buffer).contains("first")), Some(true));
+        assert_eq!(app.flash_text(), Some(("copied to clipboard", false)));
+        assert!(app.selection.as_ref().is_some_and(|s| !s.copy), "copied once");
+
+        app.on_key(KeyEvent::from(KeyCode::Char('x')), &send);
+        assert!(app.selection.is_none(), "typing lets it go");
     }
 
     #[test]

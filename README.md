@@ -65,7 +65,7 @@ It's also a remote control for the room you're in. Mention `@home` to dim the li
 
 **Interface**
 - **Calm theme.** Soft pastels on a dusk background, with a stable colour for each person.
-- **Mouse support.** The hints along the bottom are clickable buttons. You can click conversations and messages too.
+- **Mouse support.** The hints along the bottom are clickable buttons. You can click conversations and messages too, and dragging over text copies it to the clipboard when you let go.
 - **Completion.** Slash commands and `@` mentions complete with Tab.
 - **Multi-line composer** with word motions and readline-style editing keys.
 - **Scriptable.** Headless modes for bots, tests and one-off sends.
