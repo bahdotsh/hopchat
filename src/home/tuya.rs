@@ -139,7 +139,9 @@ const LAYOUT_C: Layout =
 const LAYOUTS: [&Layout; 3] = [&LAYOUT_B, &LAYOUT_A, &LAYOUT_C];
 
 /// The layout of a bulb answering `dps`; `None` for something that isn't a
-/// dimmable light, as a Tuya plug isn't.
+/// dimmable light, as a Tuya plug isn't. Most specific first: a bulb on
+/// layout A would also pass the test for layout C if its data point 2 held
+/// a number, and only a string there tells them apart.
 fn layout_of(dps: &Value) -> Option<&'static Layout> {
     let number = |k: &str| dps.get(k).is_some_and(Value::is_number);
     let string = |k: &str| dps.get(k).is_some_and(Value::is_string);
@@ -313,7 +315,7 @@ fn encrypt_ecb(key: &Key, plain: &[u8]) -> Vec<u8> {
     let pad = 16 - plain.len() % 16;
     let mut out = plain.to_vec();
     out.resize(plain.len() + pad, pad as u8);
-    for chunk in out.chunks_exact_mut(16) {
+    for chunk in out.as_chunks_mut::<16>().0 {
         cipher.encrypt_block(GenericArray::from_mut_slice(chunk));
     }
     out
@@ -327,7 +329,7 @@ fn decrypt_ecb(key: &Key, sealed: &[u8]) -> Result<Vec<u8>, String> {
     }
     let cipher = block(key);
     let mut out = sealed.to_vec();
-    for chunk in out.chunks_exact_mut(16) {
+    for chunk in out.as_chunks_mut::<16>().0 {
         cipher.decrypt_block(GenericArray::from_mut_slice(chunk));
     }
     let pad = usize::from(*out.last().unwrap_or(&0));
@@ -473,8 +475,9 @@ fn open_frame(source: &mut impl Read, version: Version, key: &Key) -> Result<Fra
         return Err("that frame failed its check, which usually means a wrong key".into());
     }
     // A bulb's own frames start with a status word, unless they're pushed.
-    let (retcode, payload) = match payload.len() % 16 {
-        3 | 4 => (word(payload), &payload[4..]),
+    // Anything shorter than the word has none, and fails as a broken frame.
+    let (retcode, payload) = match (payload.len() % 16, payload.split_first_chunk::<4>()) {
+        (3 | 4, Some((status, rest))) => (u32::from_be_bytes(*status), rest),
         _ => (0, payload),
     };
     let payload = payload.strip_prefix(version_header(version).as_slice()).unwrap_or(payload);

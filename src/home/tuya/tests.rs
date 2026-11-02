@@ -64,6 +64,27 @@ fn a_corrupt_frame_is_refused() {
 }
 
 #[test]
+fn a_frame_too_short_for_its_status_word_is_refused() {
+    // Three bytes pass every length check, and 3.3's check takes no key.
+    let head = |tag: usize| {
+        let mut frame = PREFIX_55AA.to_vec();
+        frame.extend_from_slice(&1u32.to_be_bytes());
+        frame.extend_from_slice(&DP_QUERY.to_be_bytes());
+        frame.extend_from_slice(&((3 + tag + SUFFIX_55AA.len()) as u32).to_be_bytes());
+        frame.extend_from_slice(b"abc");
+        frame
+    };
+    let mut crc = head(4);
+    crc.extend_from_slice(&crc32fast::hash(&crc).to_be_bytes());
+    crc.extend_from_slice(&SUFFIX_55AA);
+    assert!(open_frame(&mut crc.as_slice(), Version::V33, &KEY).is_err());
+    let mut tagged = head(32);
+    tagged.extend_from_slice(&hmac_of(&KEY, &[&tagged]));
+    tagged.extend_from_slice(&SUFFIX_55AA);
+    assert!(open_frame(&mut tagged.as_slice(), Version::V34, &KEY).is_err());
+}
+
+#[test]
 fn session_keys_match_tinytuya() {
     let ours: [u8; 16] = std::array::from_fn(|i| i as u8);
     let theirs: [u8; 16] = std::array::from_fn(|i| i as u8 + 16);
