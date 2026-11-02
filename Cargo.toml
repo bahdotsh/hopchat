@@ -60,3 +60,7 @@ tungstenite = { version = "0.30", default-features = false, features = ["handsha
 ureq = { version = "3", default-features = false, features = ["json", "native-tls-no-default"] }
 native-tls = "0.2"
 mdns-sd = "0.21.6"
+aes = "0.8"
+aes-gcm = "0.10"
+hmac = "0.12"
+crc32fast = "1"
