@@ -30,9 +30,9 @@ use x509_cert::serial_number::SerialNumber;
 use x509_cert::spki::SubjectPublicKeyInfoOwned;
 use x509_cert::time::Validity;
 
+use super::discover::{self, format_mac, mac_of, parse_mac};
 use super::driver::{Backend, Category, Found, PairHelp};
 use super::tv::TvDriver;
-use super::webos::{format_mac, mac_of, parse_mac, Tv as WebOsTv};
 use super::{Device, State};
 
 const REMOTE_PORT: u16 = 6466;
@@ -685,7 +685,7 @@ fn wake_then_reach(d: &Device) -> Result<Remote<TlsStream<TcpStream>>, String> {
         Err(e) => e,
     };
     let Some(mac) = d.mac.as_deref().and_then(parse_mac) else { return Err(first) };
-    (WebOsTv { ip: d.ip, mac: Some(mac), client_key: None, cert: None }).wake()?;
+    discover::wake(mac)?;
     let until = Instant::now() + Duration::from_secs(12);
     while Instant::now() < until {
         std::thread::sleep(Duration::from_secs(2));

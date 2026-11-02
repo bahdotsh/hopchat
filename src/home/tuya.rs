@@ -23,10 +23,9 @@ use hmac::{Hmac, Mac};
 use serde_json::{json, Map, Value};
 use sha2::Sha256;
 
-use super::discover;
+use super::discover::{self, format_mac, mac_of};
 use super::driver::{Backend, Category, Found, PairHelp};
 use super::light::{Caps, LightDriver, Pilot};
-use super::webos::{format_mac, mac_of};
 use super::{Device, Home, State};
 
 const PORT: u16 = 6668;
