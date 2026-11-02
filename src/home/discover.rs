@@ -73,3 +73,52 @@ pub fn local_ipv4() -> Option<Ipv4Addr> {
         _ => None,
     }
 }
+
+/// Sends the magic packet that wakes a machine in standby, if it allows that.
+pub fn wake(mac: [u8; 6]) -> Result<(), String> {
+    let mut packet = vec![0xFFu8; 6];
+    for _ in 0..16 {
+        packet.extend_from_slice(&mac);
+    }
+    let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
+    socket.set_broadcast(true).map_err(|e| e.to_string())?;
+    for port in [9, 7] {
+        socket.send_to(&packet, (Ipv4Addr::BROADCAST, port)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn mac_of(ip: Ipv4Addr) -> Option<[u8; 6]> {
+    let out = std::process::Command::new("arp").arg("-n").arg(ip.to_string()).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.split_whitespace().find_map(parse_mac)
+}
+
+pub fn parse_mac(text: &str) -> Option<[u8; 6]> {
+    let parts: Vec<&str> = text.split([':', '-']).collect();
+    if parts.len() != 6 {
+        return None;
+    }
+    let mut mac = [0u8; 6];
+    for (slot, part) in mac.iter_mut().zip(parts) {
+        *slot = u8::from_str_radix(part, 16).ok()?;
+    }
+    Some(mac)
+}
+
+pub fn format_mac(mac: &[u8; 6]) -> String {
+    mac.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn macs_from_arp() {
+        // macOS drops leading zeros in arp output.
+        assert_eq!(parse_mac("a4:36:c7:1:2:ff"), Some([0xa4, 0x36, 0xc7, 1, 2, 0xff]));
+        assert_eq!(parse_mac("(incomplete)"), None);
+        assert_eq!(format_mac(&[0xa4, 0x36, 0xc7, 1, 2, 0xff]), "a4:36:c7:01:02:ff");
+    }
+}

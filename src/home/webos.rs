@@ -7,7 +7,7 @@
 //! CA. Instead its fingerprint is pinned when the TV pairs, and a later
 //! connection presenting a different certificate is refused.
 
-use std::net::{Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
-use super::discover;
+use super::discover::{self, format_mac, mac_of, parse_mac};
 use super::driver::{Backend, Category, Found, PairHelp};
 use super::tv::TvDriver;
 use super::{Device, State};
@@ -264,16 +264,7 @@ impl Tv {
     /// standby only with "Turn on via Wi-Fi" / "Mobile TV On" enabled.
     pub fn wake(&self) -> Result<(), String> {
         let mac = self.mac.ok_or("I don't know the TV's MAC address, so I can't turn it on")?;
-        let mut packet = vec![0xFFu8; 6];
-        for _ in 0..16 {
-            packet.extend_from_slice(&mac);
-        }
-        let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
-        socket.set_broadcast(true).map_err(|e| e.to_string())?;
-        for port in [9, 7] {
-            socket.send_to(&packet, (Ipv4Addr::BROADCAST, port)).map_err(|e| e.to_string())?;
-        }
-        Ok(())
+        discover::wake(mac)
     }
 }
 
@@ -286,6 +277,7 @@ const PAIR_HELP: PairHelp = PairHelp {
         " pairs it. The TV will ask to allow hopchat; have the remote ready.",
         "For \"turn the TV on\" to work, enable Turn on via Wi-Fi in its settings.",
     ],
+    takes: PAIRING,
     during: [
         "Look at the TV: it's asking whether to allow hopchat.",
         "Choose Allow with the remote. Nothing to do here.",
@@ -561,39 +553,9 @@ pub fn status(s: &mut Session) -> Result<String, String> {
 }
 
 /// The MAC the OS has cached for `ip`, from the ARP table.
-pub fn mac_of(ip: Ipv4Addr) -> Option<[u8; 6]> {
-    let out = std::process::Command::new("arp").arg("-n").arg(ip.to_string()).output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    text.split_whitespace().find_map(parse_mac)
-}
-
-pub fn parse_mac(text: &str) -> Option<[u8; 6]> {
-    let parts: Vec<&str> = text.split([':', '-']).collect();
-    if parts.len() != 6 {
-        return None;
-    }
-    let mut mac = [0u8; 6];
-    for (slot, part) in mac.iter_mut().zip(parts) {
-        *slot = u8::from_str_radix(part, 16).ok()?;
-    }
-    Some(mac)
-}
-
-pub fn format_mac(mac: &[u8; 6]) -> String {
-    mac.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn macs_from_arp() {
-        // macOS drops leading zeros in arp output.
-        assert_eq!(parse_mac("a4:36:c7:1:2:ff"), Some([0xa4, 0x36, 0xc7, 1, 2, 0xff]));
-        assert_eq!(parse_mac("(incomplete)"), None);
-        assert_eq!(format_mac(&[0xa4, 0x36, 0xc7, 1, 2, 0xff]), "a4:36:c7:01:02:ff");
-    }
 
     #[test]
     fn registration_presents_a_known_key() {

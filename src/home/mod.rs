@@ -16,6 +16,7 @@
 //! [`lend`]), and this machine lends its own the same way.
 
 pub mod ai;
+mod androidtv;
 mod assistant;
 pub mod lend;
 mod discover;
@@ -28,6 +29,7 @@ mod printer;
 mod switch;
 mod tv;
 pub mod webos;
+mod tuya;
 pub mod wiz;
 
 use std::collections::{HashMap, HashSet};
@@ -54,9 +56,6 @@ pub const MENTION: &str = "@home";
 pub const SIGNATURE: &str = "🏠 ";
 const MAX_REQUEST_CHARS: usize = 500;
 const MAX_NAME_CHARS: usize = 32;
-/// How long a device waits for someone to allow pairing, as a TV shows its
-/// "allow this device?" prompt.
-const PAIRING: Duration = Duration::from_secs(60);
 /// How often to look again at whether the model is ready, so one started
 /// later is used and offered.
 const MODEL_CHECK: Duration = Duration::from_secs(30);
@@ -832,7 +831,7 @@ impl Home {
         };
         let Some(d) = candidate else { return };
         let Some(backend) = backend_of(&d) else { return };
-        if backend.pairing().is_none() {
+        let Some(help) = backend.pairing() else {
             self.found.retain(|f| f.id() != id);
             let name = d.name.clone();
             self.config.devices.push(d.clone());
@@ -840,11 +839,11 @@ impl Home {
             self.live.insert(d.id(), (State::Checking, String::new()));
             self.check(d);
             return self.note(format!("added {name}"));
-        }
+        };
         if matches!(self.live.get(id), Some((State::Pairing { .. }, _))) {
             return;
         }
-        self.live.insert(d.id(), (State::Pairing { until: Instant::now() + PAIRING }, String::new()));
+        self.live.insert(d.id(), (State::Pairing { until: Instant::now() + help.takes }, String::new()));
         let me = self.me.clone();
         thread::spawn(move || {
             let id = d.id();
@@ -983,6 +982,8 @@ impl Home {
                 Err(_) => format!("{ip} isn't an IPv4 address"),
             },
             ("ha", value) => self.ha_configure(value, words.next()),
+            ("tuya", value) => self.tuya_configure(value, words.next(), words.next()),
+            ("code", value) => androidtv::give_code(value),
             ("model", Some(model)) => {
                 self.config.model = model.to_string();
                 self.save();
@@ -1138,6 +1139,83 @@ mod tests {
     fn open_home(engine: Sender<Input>, ui: Sender<Update>, me: Sender<Request>) -> TestHome {
         let root = Root::new();
         TestHome { home: Home::open(&root.0, engine, ui, me), _root: root }
+    }
+
+    #[test]
+    fn a_tuya_light_joins_home_once_its_key_answers() {
+        const KEY: &str = "0123456789abcdef";
+        let mut home = home_with(Vec::new());
+        assert!(home.configure(None, "tuya").contains("/home tuya IP DEVICE_ID LOCAL_KEY"));
+        assert!(home.configure(None, "tuya 127.0.0.1 bf01 short").contains("16 characters"));
+        assert!(home.found.is_empty());
+
+        let reply = home.configure(None, &format!("tuya 127.0.0.1 bf01 {KEY}"));
+        assert_eq!(reply, "trying that key on the light at 127.0.0.1…");
+        let waiting = home.found.iter().find(|d| d.backend == "tuya").unwrap().clone();
+        assert_eq!(waiting.data, serde_json::json!({"id": "bf01", "key": KEY}));
+        assert!(home.config.devices.is_empty(), "added before the key answered");
+
+        // The pairing worker tried it, on a port nothing listens on here;
+        // this is what it reports for a bulb that took the key.
+        let mut paired = waiting.clone();
+        let extra = serde_json::json!({"version": "3.4", "layout": "b", "colour": true, "white": true});
+        for (k, v) in extra.as_object().unwrap() {
+            paired.data[k] = v.clone();
+        }
+        home.on_paired(&waiting.id(), Ok((Box::new(paired), "on · 50%".into())));
+
+        assert!(home.found.iter().all(|d| d.backend != "tuya"));
+        assert_eq!(home.lights().len(), 1);
+        let view = home.view();
+        let shown = view.devices.iter().find(|d| d.category == Category::Light).unwrap();
+        assert_eq!(shown.detail, "on · 50%");
+        assert!(view.devices.iter().all(|d| !d.detail.contains(KEY) && !d.name.contains(KEY)));
+        let again = home.configure(None, &format!("tuya 127.0.0.1 bf01 {KEY}"));
+        assert!(again.contains("already added"), "{again}");
+    }
+
+    const TUYA_KEY: &str = "0123456789abcdef";
+
+    fn paired_tuya(ip: [u8; 4], mac: &str) -> Device {
+        let data = serde_json::json!({"id": "bf01", "key": TUYA_KEY, "version": "3.4", "layout": "b", "colour": true, "white": true});
+        Device::new("tuya", "Lamp".into(), ip.into(), Some(mac.into()), data)
+    }
+
+    #[test]
+    fn a_light_still_waiting_for_its_key_is_not_offered_to_the_model() {
+        let waiting = Device::new("tuya", "Lamp".into(), [127, 0, 0, 1].into(), None, serde_json::json!({"id": "bf01", "key": TUYA_KEY}));
+        let home = home_with(vec![waiting]);
+        assert!(home.lights().is_empty());
+        assert!(home.light_tools().is_empty());
+    }
+
+    #[test]
+    fn a_tuya_light_that_moved_keeps_its_pairing() {
+        let mut home = home_with(vec![paired_tuya([127, 0, 0, 9], "aa:bb:cc:dd:ee:ff")]);
+        let moved = driver::Found {
+            backend: "tuya",
+            ip: [127, 0, 0, 8].into(),
+            mac: Some("aa:bb:cc:dd:ee:ff".into()),
+            unit: None,
+            data: Value::Null,
+            checked: None,
+        };
+        let reply = home.tuya_add(moved, "bf01".into(), "fedcba9876543210".into());
+        assert!(reply.contains("already added"), "{reply}");
+        let d = &home.config.devices[0];
+        assert_eq!(d.ip, Ipv4Addr::new(127, 0, 0, 8));
+        assert_eq!(d.data["key"], TUYA_KEY);
+        assert_eq!(d.data["layout"], "b");
+    }
+
+    #[test]
+    fn a_second_tuya_key_waits_for_the_first_try() {
+        let mut home = home_with(Vec::new());
+        home.configure(None, &format!("tuya 127.0.0.1 bf01 {TUYA_KEY}"));
+        let reply = home.configure(None, "tuya 127.0.0.1 bf01 fedcba9876543210");
+        assert!(reply.contains("still trying"), "{reply}");
+        let d = home.found.iter().find(|d| d.backend == "tuya").unwrap();
+        assert_eq!(d.data["key"], TUYA_KEY);
     }
 
     fn home_with(devices: Vec<Device>) -> TestHome {

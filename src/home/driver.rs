@@ -20,10 +20,10 @@ use super::light::LightDriver;
 use super::printer::PrinterDriver;
 use super::switch::SwitchDriver;
 use super::tv::TvDriver;
-use super::{ha, ipp, webos, wiz, Device, State};
+use super::{androidtv, ha, ipp, tuya, webos, wiz, Device, State};
 
 /// Every backend home knows, in the order an address is probed.
-pub static BACKENDS: &[&dyn Backend] = &[&wiz::Wiz, &webos::WebOs, &ipp::Ipp, &ha::HaLight, &ha::HaTv, &ha::HaSwitch];
+pub static BACKENDS: &[&dyn Backend] = &[&wiz::Wiz, &tuya::Tuya, &webos::WebOs, &androidtv::AndroidTv, &ipp::Ipp, &ha::HaLight, &ha::HaTv, &ha::HaSwitch];
 
 /// The most devices home talks to at once when it has many to reach: a
 /// home can have a hundred lights, and each is a thread and a connection.
@@ -108,6 +108,8 @@ pub struct PairHelp {
     pub before: [&'static str; 2],
     /// While it pairs: what to do on the device.
     pub during: [&'static str; 2],
+    /// How long a pairing can run, for the panel's countdown.
+    pub takes: std::time::Duration,
 }
 
 pub trait Backend: Sync {

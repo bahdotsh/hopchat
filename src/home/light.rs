@@ -54,11 +54,15 @@ pub trait LightDriver: Sync {
 type Light = (&'static dyn LightDriver, Device);
 
 impl Home {
+    /// Lights that can be driven; one that never finished pairing can't.
     pub(super) fn lights(&self) -> Vec<Light> {
         self.config
             .devices
             .iter()
-            .filter_map(|d| Some((backend_of(d)?.as_light()?, self.reach(d))))
+            .filter_map(|d| {
+                let backend = backend_of(d)?;
+                backend.ready(d).then_some((backend.as_light()?, self.reach(d)))
+            })
             .collect()
     }
 
