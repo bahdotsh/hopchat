@@ -20,10 +20,10 @@ use super::light::LightDriver;
 use super::printer::PrinterDriver;
 use super::switch::SwitchDriver;
 use super::tv::TvDriver;
-use super::{ha, ipp, tuya, webos, wiz, Device, State};
+use super::{androidtv, ha, ipp, tuya, webos, wiz, Device, State};
 
 /// Every backend home knows, in the order an address is probed.
-pub static BACKENDS: &[&dyn Backend] = &[&wiz::Wiz, &tuya::Tuya, &webos::WebOs, &ipp::Ipp, &ha::HaLight, &ha::HaTv, &ha::HaSwitch];
+pub static BACKENDS: &[&dyn Backend] = &[&wiz::Wiz, &tuya::Tuya, &webos::WebOs, &androidtv::AndroidTv, &ipp::Ipp, &ha::HaLight, &ha::HaTv, &ha::HaSwitch];
 
 /// The most devices home talks to at once when it has many to reach: a
 /// home can have a hundred lights, and each is a thread and a connection.

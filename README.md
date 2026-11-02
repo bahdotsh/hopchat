@@ -58,7 +58,7 @@ It's also a remote control for the room you're in. Mention `@home` to dim the li
 - **Offline delivery.** Messages written while a peer is away are delivered when they come back. History survives restarts.
 
 **Smart home and AI**
-- **`@home`.** Plain English becomes actions on Wiz and Tuya lights and LG webOS TVs, and answers about network printers and copiers, through a local [Ollama](https://ollama.com) model.
+- **`@home`.** Plain English becomes actions on Wiz and Tuya lights, LG webOS TVs and Android or Google TVs, and answers about network printers and copiers, through a local [Ollama](https://ollama.com) model.
 - **`@ai`.** Ask a local model anything in any conversation. Follow-up questions work.
 - **Shared models.** Only one person in a group needs a model. Everyone else borrows it over the encrypted session.
 - **Device panel.** Discover, pair, name and test devices without editing any config.
@@ -255,9 +255,10 @@ A local model turns the request into device actions, and home replies in the con
 **Setup on the machine that owns the devices:**
 
 1. Start Ollama with a tool-calling model (`qwen2.5:7b` by default; `/home model NAME` picks another). You can skip this if someone in the group shares a model (see [Shared models](#shared-models)).
-2. Press **Ctrl-D** (or type `/devices`). hopchat scans the network for Wiz and Tuya lights, LG TVs, and printers.
+2. Press **Ctrl-D** (or type `/devices`). hopchat scans the network for Wiz and Tuya lights, LG and Android TVs, and printers.
    - **Light:** Enter adds it, `t` blinks it so you can tell which one it is, and `n` names it ("Desk lamp"). A Tuya light needs its key first; see [below](#tuya-lights).
-   - **TV:** Enter pairs it. Choose *Allow* on the TV with the remote. For "turn the TV on" to work, enable *Turn on via Wi-Fi* (or *Mobile TV On*) in the TV's settings. A TV only shows up while it's on.
+   - **LG TV:** Enter pairs it. Choose *Allow* on the TV with the remote. For "turn the TV on" to work, enable *Turn on via Wi-Fi* (or *Mobile TV On*) in the TV's settings. A TV only shows up while it's on.
+   - **Android or Google TV:** Enter pairs it, and the TV shows a six-character code. Type it with `/home code CODE` within a minute. A mistyped code is caught before anything is sent, so you can type it again. This covers Sony, TCL, Xiaomi, Philips and other Google TV and Android TV sets. `t` sends the TV to its home screen.
    - **Printer or copier:** Enter adds it, `t` makes it beep or flash if it supports that, and `n` names it. Home can then say whether it is printing, how much ink or toner is left, and whether it is jammed or out of paper. It never prints anything. A printer a computer shares through CUPS isn't listed, since a network printer is found on its own; a USB printer behind a print server therefore doesn't show up.
    - The panel also shows whether the model is ready, and the exact command to run if it isn't.
 3. To let others in a group or the lobby use your devices, press `g` in the panel or type `/home on` there. `/home off` revokes it.
@@ -266,7 +267,7 @@ If a device is on another subnet, add it with `/home add 192.168.1.40`. `/home s
 
 **Tuya lights.** Wipro bulbs and most other white-label Wi-Fi bulbs are Tuya devices, and hopchat drives them directly over your LAN. Each bulb encrypts with a local key issued by its Tuya cloud account, so getting that key once is the only step that needs the internet. Link the bulb's app to a project on the [Tuya IoT platform](https://platform.tuya.com) and run the [tinytuya](https://github.com/jasonacox/tinytuya) wizard, which lists each device's ID and local key. Then add each bulb with `/home tuya IP DEVICE_ID LOCAL_KEY`. Scanning finds any device with Tuya's port 6668 open and shows it in the panel with its address, and plugs and other devices that aren't dimmable lights are refused when you add them. Protocol versions 3.3, 3.4 and 3.5 work, and hopchat works out which one a bulb speaks. Resetting a bulb or re-adding it in its app changes its key: press `x` on it in `/devices` and add it again. The key is kept in `home.json`, like the Home Assistant token below.
 
-**Home Assistant.** If you run Home Assistant, hopchat can drive anything it has an integration for. Make a long-lived access token under your HA profile (Security tab), then type `/home ha http://IP:8123 TOKEN`. `/home ha find` looks for an HA announcing itself over mDNS and tells you its address; the token is only ever sent to an address you typed, since anything on the LAN can announce itself as HA. Its devices show up in `/devices` under their HA names, to add like any other. Hidden, disabled and settings entities are left out, as are Wiz and LG TVs, which hopchat drives directly. `https://` works too, with a certificate this machine trusts. An HA integration may itself go through the cloud. hopchat talks to one Home Assistant at a time: connecting again with a new token or address updates every HA device. `/home ha forget` disconnects HA and removes its devices.
+**Home Assistant.** If you run Home Assistant, hopchat can drive anything it has an integration for. Make a long-lived access token under your HA profile (Security tab), then type `/home ha http://IP:8123 TOKEN`. `/home ha find` looks for an HA announcing itself over mDNS and tells you its address; the token is only ever sent to an address you typed, since anything on the LAN can announce itself as HA. Its devices show up in `/devices` under their HA names, to add like any other. Hidden, disabled and settings entities are left out, as are Wiz, LG and Android TVs, which hopchat drives directly. `https://` works too, with a certificate this machine trusts. An HA integration may itself go through the cloud. hopchat talks to one Home Assistant at a time: connecting again with a new token or address updates every HA device. `/home ha forget` disconnects HA and removes its devices.
 
 The token is kept in `home.json` in hopchat's settings directory, readable only by you on macOS and Linux and in plain text elsewhere; anyone who can read that file can drive your Home Assistant, so revoke the token in HA if the file leaks. Once HA devices are added, don't go back to a hopchat from before this feature: it drops their entity ids when it saves, and they can't be driven afterwards.
 
@@ -277,6 +278,7 @@ The token is kept in `home.json` in hopchat's settings directory, readable only 
 | Wiz bulbs | local UDP, port 38899 |
 | Tuya bulbs, including Wipro | local TCP, port 6668, protocol 3.3 to 3.5, with a device ID and local key |
 | LG webOS TVs | WebSocket API on port 3001 over TLS (3000 on older sets) |
+| Android and Google TVs | Android TV Remote protocol v2: pairing on port 6467, commands on 6466, TLS with a certificate per TV, found over mDNS (`_androidtvremote2._tcp`) |
 | Printers and copiers | IPP 2.0 or 1.1 on port 631, found over Bonjour (`_ipp._tcp`) |
 | Home Assistant lights, TVs and switches | HA's REST API, port 8123 by default |
 
@@ -359,6 +361,7 @@ Without `--to`, `--say` and `--file` go to the first peer whose secure session c
 | `/home add IP` | add a device by address |
 | `/home scan` | scan for devices again |
 | `/home tuya IP ID KEY` | add a Tuya light with its device ID and local key |
+| `/home code CODE` | finish pairing an Android TV with the code it shows |
 | `/home ha URL TOKEN` | connect Home Assistant and list its devices |
 | `/home ha find` | look for a Home Assistant announcing itself, and say its address |
 | `/home ha forget` | disconnect Home Assistant and remove its devices |
@@ -422,7 +425,7 @@ The SDK does no I/O itself, so hopchat supplies the platform bridge for its peer
 | Me | `src/me.rs` | A local-only conversation. Messages go straight back to the UI and to home, never onto the wire. |
 | History | `src/history.rs` | Encrypted per-conversation history. |
 | Tasks | `src/tasks.rs` | Todos and reminders: reading times from plain English, repeats, and what is due. They fire from the UI loop into Me. |
-| Home | `src/home/` | Device discovery and drivers (`wiz.rs`, `tuya.rs`, `webos.rs`, `ipp.rs`), the Ollama client, the `@home` tool-calling loop (`assistant.rs`), `@ai` (`ai.rs`), and model lending (`lend.rs`). |
+| Home | `src/home/` | Device discovery and drivers (`wiz.rs`, `tuya.rs`, `webos.rs`, `androidtv.rs`, `ipp.rs`), the Ollama client, the `@home` tool-calling loop (`assistant.rs`), `@ai` (`ai.rs`), and model lending (`lend.rs`). |
 | UI | `src/ui/` | ratatui rendering, the composer, the file browser, and the group and device panels. |
 
 ## Security
@@ -431,7 +434,7 @@ The SDK does no I/O itself, so hopchat supplies the platform bridge for its peer
 - A peer is identified only by the address its signed identity assertion proves (`off1…`). The nick in the beacon is unauthenticated and only used for display.
 - History and stores on disk are sealed with a per-profile key.
 - Received file names are sanitised: files never overwrite existing ones or escape the downloads folder.
-- LG TVs use self-signed certificates. hopchat pins the certificate it sees when pairing and refuses a different one later.
+- LG and Android TVs use self-signed certificates. hopchat pins the certificate it sees when pairing and refuses a different one later. For an Android TV, hopchat also makes its own certificate, which the TV remembers in place of a password. It is kept in `home.json` with the rest.
 - Model requests sent to a lender travel inside the encrypted one-to-one session, and lenders only answer people they share a group with.
 - Nothing is sent to the internet, apart from whatever your own Ollama setup does.
 

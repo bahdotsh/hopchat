@@ -16,6 +16,7 @@
 //! [`lend`]), and this machine lends its own the same way.
 
 pub mod ai;
+mod androidtv;
 mod assistant;
 pub mod lend;
 mod discover;
@@ -985,6 +986,7 @@ impl Home {
             },
             ("ha", value) => self.ha_configure(value, words.next()),
             ("tuya", value) => self.tuya_configure(value, words.next(), words.next()),
+            ("code", value) => androidtv::give_code(value),
             ("model", Some(model)) => {
                 self.config.model = model.to_string();
                 self.save();

@@ -66,7 +66,7 @@ const FIND: Duration = Duration::from_secs(3);
 const SERVICE: &str = "_home-assistant._tcp.local.";
 /// Integrations home drives itself: their entities would be the same
 /// device twice.
-const NATIVE: &[&str] = &["wiz", "webostv"];
+const NATIVE: &[&str] = &["wiz", "webostv", "androidtv_remote"];
 /// The most of an answer to read. A big home's `/api/states` runs to
 /// megabytes, past the HTTP client's own 10 MB default.
 const MAX_ANSWER: u64 = 64 * 1024 * 1024;
@@ -660,6 +660,7 @@ mod tests {
         assert!(!wanted(&json!({"platform": "hue", "disabled_by": "integration"})));
         assert!(!wanted(&json!({"platform": "hue", "entity_category": "config"})));
         assert!(!wanted(&json!({"platform": "wiz"})), "a Wiz bulb is driven by home directly");
+        assert!(!wanted(&json!({"platform": "androidtv_remote"})), "an Android TV is driven by home directly");
     }
 
     #[test]
