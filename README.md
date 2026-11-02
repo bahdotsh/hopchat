@@ -212,7 +212,7 @@ drink water every 2 hours             ◷ reminder · ↻ every 2h
 
 The time can come before or after the task. Text that doesn't read as a time stays part of the task, so "meet at the cafe" is a todo. A bare "at 5" means 5 pm.
 
-- **From anywhere.** `/todo TEXT` and `/remind TEXT` add one without opening the list. Select any message (click it, or ↑) and press `t` to turn it into a todo, with its text filled in so you can add a time.
+- **From anywhere.** `/todo TEXT` and `/remind TEXT` add one without opening the list. Select any message (click it, or Alt-↑) and press `t` to turn it into a todo, with its text filled in so you can add a time.
 - **When it's time**, the reminder appears in Me with a bell, an unread badge and a note in the footer, whichever chat you're in. The strip at the top shows what's due, or what's next. iTerm2, WezTerm and Ghostty also show a desktop notification.
 - **On the reminder in Me:** `x` checks it off, `s` snoozes it 10 minutes, and `o` goes back to the chat it was set in.
 - **In the list:** Space checks off, `s` snoozes, Enter edits, `d` deletes (`u` undoes), `o` goes to the chat it came from, and `c` clears what's done.
@@ -224,7 +224,8 @@ A one-off reminder waits under **Due** until you check it off or snooze it. A re
 Click a person in the sidebar to open a private chat. A secure session is set up as soon as you see each other.
 
 - **Send** with Enter. Shift-Enter, Alt-Enter or Ctrl-J starts a new line.
-- **Reply, open, copy or retry** a message by clicking it, or by pressing ↑ on an empty line.
+- **Reply, open, copy or retry** a message by clicking it, or by pressing Alt-↑ (Ctrl-↑ also works).
+- **Send it again.** ↑ brings back what you sent in this conversation, commands included, and ↓ goes forward to your draft. Press Enter to send the line again.
 - **Send files** with Ctrl-O, by dragging them onto the window, or with `/file PATH`. Up to two transfers run per peer at once, and the rest wait in a queue. A transfer interrupted by quitting resumes on the next run.
 - **Received files** are saved to `~/Downloads/hopchat`. They never overwrite an existing file and never end up outside that folder.
 
@@ -329,7 +330,8 @@ Without `--to`, `--say` and `--file` go to the first peer whose secure session c
 | Tab / Shift-Tab, Ctrl-N / Ctrl-P, Alt-1…9 | switch conversation |
 | Tab after `/` or `@` | complete a command or mention |
 | Ctrl-O | attach files |
-| ↑ on an empty line, or click | select a message: `r` reply, `o` open, `f` show in folder, `y` copy, `t` todo, `R` retry, `g`/`G` first/last, Esc back |
+| ↑ / ↓ | go through what you sent in this conversation; Enter sends it again |
+| Alt-↑ or Ctrl-↑, or click | select a message: `r` reply, `o` open, `f` show in folder, `y` copy, `t` todo, `R` retry, `g`/`G` first/last, Esc back |
 | PgUp / PgDn, mouse wheel | scroll |
 | Ctrl-T | todos and reminders |
 | Ctrl-G | new group |

@@ -1061,7 +1061,7 @@ impl App {
                 ("Ctrl-T", "todos", ctrl('t')),
                 ("Ctrl-D", "devices", ctrl('d')),
                 ("Tab", "next chat", press(KeyCode::Tab)),
-                ("↑", "select", press(KeyCode::Up)),
+                ("Alt-↑", "select", Some(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT))),
                 ("F1", "help", press(KeyCode::F(1))),
             ],
         };
@@ -1925,6 +1925,7 @@ fn draw_help(frame: &mut Frame, at: usize) -> usize {
     };
     let chatting: &[(&str, &str)] = &[
         ("Enter", "send (with any attached files)"),
+        ("↑ · ↓", "what you sent here, to edit or send again"),
         ("Shift/Alt-Enter", "new line (Ctrl-J works everywhere)"),
         ("Tab · Shift-Tab", "next / previous conversation (also Ctrl-N/P)"),
         ("Alt-1 … 9", "jump to a conversation"),
@@ -1961,7 +1962,7 @@ fn draw_help(frame: &mut Frame, at: usize) -> usize {
         let mut out = vec![Line::from("")];
         out.extend(section("Chatting", chatting, width));
         out.extend(section("Files", files, width));
-        out.extend(section("Messages  (click one, or ↑ on an empty line)", messages, width));
+        out.extend(section("Messages  (click one, or Alt-↑)", messages, width));
         out.extend(section("Editing", editing, width));
         out
     };
