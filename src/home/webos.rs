@@ -15,6 +15,8 @@ use sha2::{Digest, Sha256};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
+use super::watch::{self, Pick};
+
 use super::discover::{self, format_mac, mac_of, parse_mac};
 use super::driver::{Backend, Category, Found, PairHelp};
 use super::tv::TvDriver;
@@ -433,6 +435,10 @@ impl TvDriver for WebOs {
         session(d, |s| launch(s, app))
     }
 
+    fn play(&self, d: &mut Device, app: &str, what: &str) -> Result<String, String> {
+        session(d, |s| play(s, app, what))
+    }
+
     fn input(&self, d: &mut Device, wanted: &str) -> Result<String, String> {
         session(d, |s| input(s, wanted))
     }
@@ -511,6 +517,25 @@ pub fn launch(s: &mut Session, app: &str) -> Result<String, String> {
     Ok(format!("opened {title}"))
 }
 
+/// webOS apps take no link, so only a YouTube video can be named to one.
+fn play(s: &mut Session, app: &str, what: &str) -> Result<String, String> {
+    if let Some(video @ Pick::Video { id, music: false, .. }) = &watch::pick(app, what) {
+        s.request("ssap://system.launcher/launch", youtube_launch(id))?;
+        return Ok(video.said(what));
+    }
+    launch(s, app)?;
+    Ok(watch::only_opened(app, what))
+}
+
+/// Older firmware reads `contentId`, newer `contentTarget`.
+fn youtube_launch(video: &str) -> Value {
+    json!({
+        "id": "youtube.leanback.v4",
+        "contentId": video,
+        "params": {"contentTarget": format!("https://www.youtube.com/tv?v={video}")},
+    })
+}
+
 pub fn input(s: &mut Session, input: &str) -> Result<String, String> {
     let digits: String = input.chars().filter(char::is_ascii_digit).collect();
     let id = if input.to_ascii_lowercase().contains("hdmi") && !digits.is_empty() {
@@ -561,5 +586,13 @@ mod tests {
     fn registration_presents_a_known_key() {
         assert_eq!(registration(Some("k1"))["payload"]["client-key"], "k1");
         assert!(registration(None)["payload"].get("client-key").is_none());
+    }
+
+    #[test]
+    fn a_video_is_named_both_ways_firmware_reads() {
+        let launch = youtube_launch("pMpTUqJMnzM");
+        assert_eq!(launch["id"], "youtube.leanback.v4");
+        assert_eq!(launch["contentId"], "pMpTUqJMnzM");
+        assert_eq!(launch["params"]["contentTarget"], "https://www.youtube.com/tv?v=pMpTUqJMnzM");
     }
 }

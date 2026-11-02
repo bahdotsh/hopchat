@@ -416,6 +416,11 @@ fn pairs_with_the_code_the_tv_shows() {
     let mut r = remote_at(&d, remote).unwrap();
     r.launch(&app_link("youtube").unwrap()).unwrap();
     assert_eq!(screen.lock().unwrap().launched, vec!["https://www.youtube.com".to_string()]);
+    // A title goes out as the link it became, not the app's front page.
+    let mut r = remote_at(&d, remote).unwrap();
+    let netflix = crate::home::watch::pick("netflix", "Dark").unwrap();
+    r.launch(netflix.link()).unwrap();
+    assert_eq!(screen.lock().unwrap().launched.last().unwrap(), "https://www.netflix.com/search?q=Dark");
     // A link the TV refuses is reported, not taken as done.
     let mut r = remote_at(&d, remote).unwrap();
     let refused = r.launch(&app_link("com.example.missing").unwrap()).unwrap_err();

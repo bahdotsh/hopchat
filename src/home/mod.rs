@@ -30,6 +30,7 @@ mod switch;
 mod tv;
 pub mod webos;
 mod tuya;
+mod watch;
 pub mod wiz;
 
 use std::collections::{HashMap, HashSet};
@@ -1750,7 +1751,7 @@ mod tests {
             home.add(&id);
         }
         let tools = home.tools().to_string();
-        assert!(tools.contains("light_set") && tools.contains("tv_open_app") && tools.contains("switch_set"));
+        assert!(tools.contains("light_set") && tools.contains("tv_open_app") && tools.contains("tv_play") && tools.contains("switch_set"));
         println!("{}", home.system_prompt());
         let run = |home: &mut Home, tool: &str, args: Value| home.run_tool(tool, &args).unwrap();
         assert_eq!(run(&mut home, "light_set", json!({"light": "bed light", "brightness": "25%", "color": "blue"})), "Bed Light is now on · 25% · #0000ff");

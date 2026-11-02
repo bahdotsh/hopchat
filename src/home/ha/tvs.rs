@@ -6,6 +6,10 @@ use super::{features, sayable, MAX_SOURCES_SAID, VOLUME_SET, VOLUME_STEP, called
 use crate::home::driver::{Backend, Category};
 use crate::home::{Device, State};
 use crate::home::tv::TvDriver;
+use crate::home::watch;
+
+/// The bit in `supported_features` that says a player takes `play_media`.
+const PLAY_MEDIA: u64 = 512;
 
 /// TVs Home Assistant drives, as media players.
 pub struct HaTv;
@@ -121,6 +125,20 @@ impl TvDriver for HaTv {
     /// An app and an input are both a source to HA.
     fn open_app(&self, d: &mut Device, app: &str) -> Result<String, String> {
         self.source(d, app)
+    }
+
+    /// Whether a link gets through is up to the integration behind the
+    /// TV, and HA says when it can't take one.
+    fn play(&self, d: &mut Device, app: &str, what: &str) -> Result<String, String> {
+        let hub = Hub::of(d)?;
+        let entity = entity(d)?;
+        if let Some(pick) = watch::pick(app, what).filter(|_| hub.state(entity).is_ok_and(|s| features(&s) & PLAY_MEDIA != 0)) {
+            let body = json!({"media_content_type": "url", "media_content_id": pick.link()});
+            hub.drive("media_player.play_media", entity, body, describe_tv)?;
+            return Ok(pick.said(what));
+        }
+        self.source(d, app)?;
+        Ok(watch::only_opened(app, what))
     }
 
     fn input(&self, d: &mut Device, input: &str) -> Result<String, String> {

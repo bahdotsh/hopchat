@@ -17,7 +17,7 @@
 
 hopchat is a terminal chat app built on the [Offline Protocol SDK](https://github.com/Offline-Protocol/offline-protocol-sdk) and [ratatui](https://ratatui.rs). Peers on the same network find each other on their own, and every conversation is end-to-end encrypted with MLS (RFC 9420).
 
-It's also a remote control for the room you're in. Mention `@home` to dim the lights or put something on the TV, and `@ai` to ask a local model. One person's model can answer for the whole group, and nothing leaves your network.
+It's also a remote control for the room you're in. Mention `@home` to dim the lights or put something on the TV, and `@ai` to ask a local model. One person's model can answer for the whole group. Nothing leaves your network, except a title you ask the TV to play on YouTube, which is looked up on youtube.com.
 
 ## Table of contents
 
@@ -247,6 +247,8 @@ Mention `@home` in Me, the lobby or any group you're in:
 @home dim the lights to 20% and put on netflix
 @home make the lamp purple
 @home turn the tv down a bit
+@home play Ithinno Aadame on jstv
+@home search netflix for Dark
 @home is the light on?
 @home turn on the kettle
 ```
