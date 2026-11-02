@@ -1174,6 +1174,50 @@ mod tests {
         assert!(again.contains("already added"), "{again}");
     }
 
+    const TUYA_KEY: &str = "0123456789abcdef";
+
+    fn paired_tuya(ip: [u8; 4], mac: &str) -> Device {
+        let data = serde_json::json!({"id": "bf01", "key": TUYA_KEY, "version": "3.4", "layout": "b", "colour": true, "white": true});
+        Device::new("tuya", "Lamp".into(), ip.into(), Some(mac.into()), data)
+    }
+
+    #[test]
+    fn a_light_still_waiting_for_its_key_is_not_offered_to_the_model() {
+        let waiting = Device::new("tuya", "Lamp".into(), [127, 0, 0, 1].into(), None, serde_json::json!({"id": "bf01", "key": TUYA_KEY}));
+        let home = home_with(vec![waiting]);
+        assert!(home.lights().is_empty());
+        assert!(home.light_tools().is_empty());
+    }
+
+    #[test]
+    fn a_tuya_light_that_moved_keeps_its_pairing() {
+        let mut home = home_with(vec![paired_tuya([127, 0, 0, 9], "aa:bb:cc:dd:ee:ff")]);
+        let moved = driver::Found {
+            backend: "tuya",
+            ip: [127, 0, 0, 8].into(),
+            mac: Some("aa:bb:cc:dd:ee:ff".into()),
+            unit: None,
+            data: Value::Null,
+            checked: None,
+        };
+        let reply = home.tuya_add(moved, "bf01".into(), "fedcba9876543210".into());
+        assert!(reply.contains("already added"), "{reply}");
+        let d = &home.config.devices[0];
+        assert_eq!(d.ip, Ipv4Addr::new(127, 0, 0, 8));
+        assert_eq!(d.data["key"], TUYA_KEY);
+        assert_eq!(d.data["layout"], "b");
+    }
+
+    #[test]
+    fn a_second_tuya_key_waits_for_the_first_try() {
+        let mut home = home_with(Vec::new());
+        home.configure(None, &format!("tuya 127.0.0.1 bf01 {TUYA_KEY}"));
+        let reply = home.configure(None, "tuya 127.0.0.1 bf01 fedcba9876543210");
+        assert!(reply.contains("still trying"), "{reply}");
+        let d = home.found.iter().find(|d| d.backend == "tuya").unwrap();
+        assert_eq!(d.data["key"], TUYA_KEY);
+    }
+
     fn home_with(devices: Vec<Device>) -> TestHome {
         let (engine, _) = std::sync::mpsc::channel();
         let (ui, _) = std::sync::mpsc::channel();

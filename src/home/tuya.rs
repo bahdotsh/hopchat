@@ -842,16 +842,28 @@ impl Home {
             Ok(args) => args,
             Err(e) => return e,
         };
-        let here = |d: &&mut Device| d.backend == "tuya" && d.ip == ip;
-        if let Some(d) = self.config.devices.iter().find(|d| d.backend == "tuya" && d.ip == ip && Tuya.ready(d)) {
+        self.tuya_add(found(ip), id, key)
+    }
+
+    /// Gives what was found its key and pairs it. A light already paired
+    /// keeps what it has: finding it first means one that moved is caught
+    /// at its new address, not given a key that might be wrong.
+    pub(super) fn tuya_add(&mut self, f: Found, id: String, key: String) -> String {
+        let ip = f.ip;
+        let here = |d: &Device| d.backend == "tuya" && d.ip == ip;
+        self.on_found(f);
+        if let Some(d) = self.config.devices.iter().find(|d| here(d) && Tuya.ready(d)) {
             return format!("{} is already added; press x on it in /devices first if its key changed", d.name);
         }
-        self.on_found(found(ip));
         let data = json!({"id": id, "key": key});
-        let waiting = self.found.iter_mut().find(here);
-        let Some(d) = waiting.or_else(|| self.config.devices.iter_mut().find(here)) else {
+        let waiting = self.found.iter_mut().find(|d| here(d));
+        let Some(d) = waiting.or_else(|| self.config.devices.iter_mut().find(|d| here(d))) else {
             return format!("nothing to add at {ip}");
         };
+        // The try under way has its own copy of the key; this one would be ignored.
+        if matches!(self.live.get(&d.id()), Some((State::Pairing { .. }, _))) {
+            return format!("still trying a key on the light at {ip}; wait for that to finish");
+        }
         d.data = data;
         let device = d.id();
         self.add(&device);
