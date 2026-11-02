@@ -5,6 +5,7 @@ mod devices;
 mod editor;
 mod groups;
 mod picker;
+mod recall;
 mod render;
 mod tasks;
 pub mod theme;
@@ -34,6 +35,7 @@ use devices::Devices;
 use editor::Editor;
 use groups::{Candidate, GroupPanel};
 use picker::{Outcome, Picker};
+use recall::Recall;
 use tasks::TaskPanel;
 
 const LOG_LINES: usize = 300;
@@ -125,6 +127,7 @@ pub struct App {
     pub convos: Vec<Convo>,
     pub selected: Option<String>,
     pub editor: Editor,
+    recall: Recall,
     pub attachments: Vec<PathBuf>,
     pub reply: Option<String>,
     pub mode: Mode,
@@ -203,6 +206,7 @@ impl App {
             convos,
             selected: None,
             editor: Editor::default(),
+            recall: Recall::default(),
             attachments: Vec::new(),
             reply: None,
             mode: Mode::Normal,
@@ -393,6 +397,7 @@ impl App {
         if address != self.selected {
             self.stop_typing(send);
             self.selected = address;
+            self.recall.stop();
             self.scroll = 0;
             self.reply = None;
             if matches!(self.mode, Mode::Select(_)) {
@@ -1046,12 +1051,16 @@ impl App {
             }
             KeyCode::PageUp => self.scroll += page,
             KeyCode::PageDown => self.scroll = self.scroll.saturating_sub(page),
-            KeyCode::Up if self.editor.is_empty() || ctrl => self.enter_select(),
+            KeyCode::Up if ctrl || alt => self.enter_select(),
             KeyCode::Up => {
-                self.editor.up();
+                if !self.editor.up() {
+                    self.recall_older(send);
+                }
             }
             KeyCode::Down => {
-                self.editor.down();
+                if !self.editor.down() {
+                    self.recall_newer(send);
+                }
             }
             KeyCode::Left if ctrl || alt => self.editor.word_left(),
             KeyCode::Right if ctrl || alt => self.editor.word_right(),
@@ -1093,6 +1102,48 @@ impl App {
                 self.edited(send);
             }
             _ => {}
+        }
+    }
+
+    /// Makes sure the open conversation's sent lines are loaded, and names it.
+    /// Commands run before anyone is open are kept under no address.
+    fn recall_address(&mut self) -> String {
+        let address = self.selected.clone().unwrap_or_default();
+        if !self.recall.has(&address) {
+            let sent = self
+                .convos
+                .iter()
+                .find(|c| c.data.address == address)
+                .map(|c| sent_lines(&c.data.entries))
+                .unwrap_or_default();
+            self.recall.load(&address, sent);
+        }
+        address
+    }
+
+    fn remember(&mut self, text: &str) {
+        let address = self.recall_address();
+        self.recall.push(&address, text.to_string());
+    }
+
+    fn recall_older(&mut self, send: &impl Fn(Command)) {
+        let address = self.recall_address();
+        match self.recall.older(&address, self.editor.text()) {
+            Some(line) => {
+                self.editor.set(&line);
+                self.edited(send);
+            }
+            // Nothing of yours to go back to, so the messages are next.
+            None if self.editor.is_empty() => self.enter_select(),
+            None => {}
+        }
+    }
+
+    fn recall_newer(&mut self, send: &impl Fn(Command)) {
+        let address = self.recall_address();
+        if let Some(line) = self.recall.newer(&address, self.editor.text()) {
+            self.editor.set(&line);
+            self.edited(send);
         }
     }
 
@@ -1401,6 +1452,7 @@ impl App {
     fn submit(&mut self, send: &impl Fn(Command)) {
         let text = self.editor.text().trim().to_string();
         if let Some(command) = text.strip_prefix('/') {
+            self.remember(&text);
             self.editor.take();
             return self.run_command(command, send);
         }
@@ -1410,6 +1462,9 @@ impl App {
             }
             return;
         };
+        if !text.is_empty() {
+            self.remember(&text);
+        }
         if self.in_group() {
             if !self.attachments.is_empty() {
                 self.attachments.clear();
@@ -1496,6 +1551,7 @@ impl App {
                     if let Some(store) = &self.store {
                         store.forget(&address);
                     }
+                    self.recall.forget(&address);
                     self.reply = None;
                     self.scroll = 0;
                     self.flash("conversation cleared on this device");
@@ -1933,6 +1989,21 @@ fn first_line(text: &str) -> String {
         out.push('…');
     }
     out
+}
+
+/// What you wrote in a conversation, oldest first: not files, and not
+/// home's and the AI's replies, which go out in your name.
+fn sent_lines(entries: &[Entry]) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|e| e.mine)
+        .filter_map(|e| match &e.body {
+            Body::Text(text) => Some(text),
+            _ => None,
+        })
+        .filter(|text| !text.starts_with(home::SIGNATURE) && !text.starts_with(home::ai::SIGNATURE))
+        .cloned()
+        .collect()
 }
 
 pub fn file_name(path: &Path) -> String {
@@ -2646,6 +2717,116 @@ mod render_tests {
             let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
             terminal.draw(|f| app.draw(f)).unwrap();
         }
+    }
+
+    #[test]
+    fn up_recalls_what_was_sent_and_enter_sends_it_again() {
+        let mut app = test_app();
+        let commands = std::cell::RefCell::new(Vec::new());
+        let send = |c: Command| commands.borrow_mut().push(c);
+        let key = |app: &mut App, code| app.on_key(KeyEvent::from(code), &send);
+        app.select(Some(LOBBY.into()), &send);
+        app.apply(
+            Update::GroupQueued { group: LOBBY.into(), id: "m1".into(), text: "from last time".into(), reply: None },
+            &send,
+        );
+        app.apply(
+            Update::GroupQueued { group: LOBBY.into(), id: "m2".into(), text: "🏠 lights are off".into(), reply: None },
+            &send,
+        );
+        app.editor.set("hello");
+        key(&mut app, KeyCode::Enter);
+        app.editor.set("/log");
+        key(&mut app, KeyCode::Enter);
+        assert!(app.show_log);
+
+        app.editor.set("half written");
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.editor.text(), "/log", "commands come back too");
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.editor.text(), "hello");
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.editor.text(), "from last time", "history survives, home's replies don't");
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.editor.text(), "from last time", "stops at the oldest");
+        assert!(matches!(app.mode, Mode::Normal));
+        for _ in 0..3 {
+            key(&mut app, KeyCode::Down);
+        }
+        assert_eq!(app.editor.text(), "half written", "the draft comes back");
+
+        app.editor.take();
+        key(&mut app, KeyCode::Up);
+        key(&mut app, KeyCode::Up);
+        commands.borrow_mut().clear();
+        key(&mut app, KeyCode::Enter);
+        assert!(app.editor.is_empty());
+        assert!(
+            commands.borrow().iter().any(|c| matches!(c, Command::SendGroup { text, .. } if text == "hello")),
+            "Enter sends it again"
+        );
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.editor.text(), "hello", "the resend is the newest line");
+    }
+
+    #[test]
+    fn recalled_lines_stay_in_their_conversation() {
+        let mut app = test_app();
+        let send = |_: Command| {};
+        let key = |app: &mut App, code| app.on_key(KeyEvent::from(code), &send);
+        app.select(Some(LOBBY.into()), &send);
+        app.editor.set("for the lobby");
+        key(&mut app, KeyCode::Enter);
+        app.select(Some(ME.into()), &send);
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.editor.text(), "", "nothing was sent here");
+
+        app.select(Some(LOBBY.into()), &send);
+        app.mode = Mode::Normal;
+        app.editor.set("/clear");
+        key(&mut app, KeyCode::Enter);
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.editor.text(), "", "clearing a conversation clears its recall");
+    }
+
+    #[test]
+    fn multi_line_text_moves_before_it_recalls() {
+        let mut app = test_app();
+        let send = |_: Command| {};
+        let key = |app: &mut App, code| app.on_key(KeyEvent::from(code), &send);
+        app.select(Some(LOBBY.into()), &send);
+        app.editor.set("sent");
+        key(&mut app, KeyCode::Enter);
+        app.editor.set("a\nb");
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.editor.text(), "a\nb");
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.editor.text(), "sent");
+    }
+
+    #[test]
+    fn alt_up_selects_a_message_and_up_does_with_nothing_sent() {
+        let mut app = test_app();
+        let send = |_: Command| {};
+        app.select(Some(LOBBY.into()), &send);
+        app.apply(
+            Update::GroupIncoming {
+                group: LOBBY.into(),
+                from: "off1bob00000000000000".into(),
+                id: "m1".into(),
+                text: "hi".into(),
+                reply_to: None,
+            },
+            &send,
+        );
+        app.on_key(KeyEvent::from(KeyCode::Up), &send);
+        assert!(matches!(app.mode, Mode::Select(_)));
+
+        app.mode = Mode::Normal;
+        app.editor.set("mine");
+        app.on_key(KeyEvent::from(KeyCode::Enter), &send);
+        app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT), &send);
+        assert!(matches!(app.mode, Mode::Select(_)));
     }
 
     fn clock_now() -> String {
