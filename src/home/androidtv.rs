@@ -86,6 +86,9 @@ const APPS: &[(&str, &str)] = &[
     ("disney", "https://www.disneyplus.com"),
     ("spotify", "spotify://"),
 ];
+/// The only links passed on as typed. Anyone home answers can name an app,
+/// and a link can be anything the TV has a handler for.
+const LINK_SCHEMES: &[&str] = &["https://", "spotify://"];
 /// How long the TV takes to refuse a link it can't open.
 const REFUSAL: Duration = Duration::from_millis(1500);
 
@@ -621,7 +624,7 @@ impl<S: Read + Write> Remote<S> {
 fn app_link(app: &str) -> Option<String> {
     let spoken = app.trim().to_ascii_lowercase();
     if spoken.contains("://") {
-        return Some(app.trim().to_string());
+        return LINK_SCHEMES.iter().any(|s| spoken.starts_with(s)).then(|| app.trim().to_string());
     }
     let known = APPS
         .iter()
@@ -658,6 +661,9 @@ fn field<'a>(d: &'a Device, name: &str) -> Option<&'a str> {
     d.data.get(name).and_then(Value::as_str)
 }
 
+/// What a TV presenting another certificate is told apart by.
+const NEW_CERTIFICATE: &str = "showed a different certificate than when it paired";
+
 fn remote_at(d: &Device, to: SocketAddr) -> Result<Remote<TlsStream<TcpStream>>, String> {
     let (Some(cert), Some(key), Some(pin)) = (field(d, "client_cert"), field(d, "client_key"), field(d, "pin")) else {
         return Err(format!("{} isn't paired yet; press Enter on it in /devices", d.name));
@@ -670,7 +676,7 @@ fn remote_at(d: &Device, to: SocketAddr) -> Result<Remote<TlsStream<TcpStream>>,
         }
     })?;
     if fingerprint(&peer_der(&tls)?) != pin {
-        return Err(format!("{} showed a different certificate than when it paired; if it was reset, pair it again", d.name));
+        return Err(format!("{} {NEW_CERTIFICATE}; if it was reset, pair it again", d.name));
     }
     Remote::start(tls)
 }
@@ -736,6 +742,16 @@ const PAIR_HELP: PairHelp = PairHelp {
     takes: PAIRING_TAKES,
 };
 
+/// What a connection attempt says about a paired TV. Most failures mean
+/// it's off, but a changed certificate has to be seen.
+fn health<S: Read + Write>(reached: Result<Remote<S>, String>) -> (State, String) {
+    match reached {
+        Ok(r) => (State::Ready, r.describe()),
+        Err(e) if e.contains(NEW_CERTIFICATE) => (State::Failed(e), String::new()),
+        Err(_) => (State::Offline, "off or in standby".into()),
+    }
+}
+
 fn found(ip: Ipv4Addr, name: Option<String>) -> Found {
     let mac = mac_of(ip).map(|m| format_mac(&m));
     let data = name.map(|n| json!({"name": n})).unwrap_or_else(|| json!({}));
@@ -797,10 +813,7 @@ impl Backend for AndroidTv {
         if !self.ready(d) {
             return (State::Ready, "Android TV".into());
         }
-        match remote_of(d) {
-            Ok(r) => (State::Ready, r.describe()),
-            Err(_) => (State::Offline, "off or in standby".into()),
-        }
+        health(remote_of(d))
     }
 
     fn test(&self, d: &mut Device) -> Result<String, String> {

@@ -84,10 +84,80 @@ fn apps_inputs_and_keys_by_spoken_name() {
     assert_eq!(app_link("in.startv.hotstar").as_deref(), Some("market://launch?id=in.startv.hotstar"));
     assert_eq!(app_link("https://www.netflix.com/title").as_deref(), Some("https://www.netflix.com/title"));
     assert_eq!(app_link("my favourite thing"), None);
+    assert_eq!(app_link("spotify://").as_deref(), Some("spotify://"));
+    for link in ["intent://scan#Intent;end", "http://example.com", "market://launch?id=com.example", "file:///etc/passwd"] {
+        assert_eq!(app_link(link), None, "{link}");
+    }
     assert_eq!(input_key("HDMI_1"), Some(243));
     assert_eq!(input_key("hdmi 4"), Some(246));
     assert_eq!(input_key("HDMI 5"), None);
     assert_eq!(input_key("Live TV"), Some(KEY_TV));
+}
+
+/// A stream that hands over `chunks` one read at a time, then times out.
+#[derive(Default)]
+struct Scripted {
+    chunks: std::collections::VecDeque<Vec<u8>>,
+    sent: Vec<u8>,
+}
+
+impl Read for Scripted {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let Some(chunk) = self.chunks.pop_front() else {
+            return Err(std::io::ErrorKind::WouldBlock.into());
+        };
+        buf[..chunk.len()].copy_from_slice(&chunk);
+        Ok(chunk.len())
+    }
+}
+
+impl Write for Scripted {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.sent.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn scripted_remote(chunks: Vec<Vec<u8>>) -> Remote<Scripted> {
+    let stream = Scripted { chunks: chunks.into(), sent: Vec::new() };
+    Remote { wire: Wire { stream, buf: Vec::new() }, on: Some(true), volume: None, model: None, features: FEATURES }
+}
+
+#[test]
+fn a_message_split_across_reads_is_put_back_together() {
+    let bytes = remote(40, Pb::default().int(1, 1)).framed();
+    let (head, tail) = bytes.split_at(2);
+    let mut r = scripted_remote(vec![head.to_vec(), tail.to_vec()]);
+    let message = r.wire.next(Instant::now() + Duration::from_secs(1)).unwrap().unwrap();
+    assert_eq!(message.msg(40).unwrap().int(1), Some(1));
+}
+
+#[test]
+fn a_refused_link_is_reported_even_if_the_tv_stays_connected() {
+    let refused = remote(3, Pb::default().int(1, 7)).framed();
+    let mut r = scripted_remote(vec![refused]);
+    assert!(r.launch("https://www.youtube.com").unwrap_err().contains("couldn't open"));
+}
+
+#[test]
+fn a_tv_that_reports_no_volume_can_still_step_it() {
+    let mut r = scripted_remote(Vec::new());
+    assert!(r.volume(Some(30), None, None).unwrap_err().contains("doesn't report"));
+    assert_eq!(r.volume(None, Some(2), None), Ok("done".into()));
+    let press = remote(10, Pb::default().int(1, KEY_VOLUME_UP).int(2, SHORT)).framed();
+    assert_eq!(r.wire.stream.sent, [press.clone(), press].concat());
+    r.volume = Some(Volume { level: 0, max: 0, muted: false });
+    assert!(r.volume(Some(30), None, None).is_err());
+}
+
+#[test]
+fn a_tv_with_nothing_to_wake_it_by_reports_why_it_failed() {
+    let d = Device::new("androidtv", "Living room".into(), Ipv4Addr::LOCALHOST, None, json!({}));
+    assert!(wake_then_reach(&d).err().unwrap().contains("isn't paired yet"));
 }
 
 #[test]
@@ -360,6 +430,11 @@ fn a_tv_with_another_certificate_is_refused() {
     d.data["pin"] = json!("00".repeat(32));
     let error = remote_at(&d, remote).err().unwrap();
     assert!(error.contains("different certificate"), "{error}");
+    // The panel says so, rather than that it's off.
+    let (state, _) = health(remote_at(&d, remote));
+    assert!(matches!(state, State::Failed(e) if e.contains("different certificate")));
+    let (state, detail) = health::<TcpStream>(Err("the TV at 127.0.0.1 isn't answering".into()));
+    assert!(matches!(state, State::Offline) && detail == "off or in standby");
 }
 
 #[test]
