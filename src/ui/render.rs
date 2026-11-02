@@ -1,5 +1,6 @@
 //! Drawing: everything here reads the app and paints; nothing changes
-//! state except the remembered hit areas and the scroll clamp.
+//! state except the remembered hit areas, the scroll clamp, and copying a
+//! released selection, which is read off the finished frame.
 
 use std::time::Duration;
 
@@ -130,6 +131,12 @@ impl App {
             self.peer_rows.clear();
             self.new_group_row = Rect::default();
         }
+        // The log's text starts below its border, title and rule.
+        self.log_area = if log_width > 0 {
+            Rect::new(log.x + 1, log.y + 2, log.width - 1, log.height.saturating_sub(2))
+        } else {
+            Rect::default()
+        };
         self.draw_main(frame, main);
         if log_width > 0 {
             self.draw_log(frame, log);
@@ -147,6 +154,7 @@ impl App {
             }
             _ => {}
         }
+        self.finish_selection(frame.buffer_mut());
     }
 
     /// The opening moment: the name, one line about what this is, and who
@@ -1971,7 +1979,7 @@ fn draw_help(frame: &mut Frame, at: usize) -> usize {
         out.extend(section("Elsewhere", elsewhere, width));
         out.extend(section("Commands  (type / to see them)", COMMANDS, width));
         out.extend(wrap_line(
-            Line::from("  To select text with the mouse, hold Shift (Option in iTerm/Terminal).".fg(theme::faint())),
+            Line::from("  Drag over messages to copy them. To select anything else, hold Shift (Option in iTerm/Terminal).".fg(theme::faint())),
             width,
         ));
         out
