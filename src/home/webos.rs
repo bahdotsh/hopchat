@@ -498,34 +498,54 @@ fn current_volume(s: &mut Session) -> Result<(u64, bool), String> {
 }
 
 pub fn launch(s: &mut Session, app: &str) -> Result<String, String> {
-    let wanted = app.trim().to_ascii_lowercase();
-    let known = APPS.iter().find(|(name, _)| *name == wanted).map(|(_, id)| id.to_string());
-    let (id, title) = match known {
-        Some(id) => (id, app.trim().to_string()),
-        None => {
-            let listed = s.request("ssap://com.webos.applicationManager/listApps", json!({}))?;
-            let apps = listed.get("apps").and_then(Value::as_array).cloned().unwrap_or_default();
-            let hit = apps.iter().find_map(|a| {
-                let title = a.get("title")?.as_str()?;
-                let id = a.get("id")?.as_str()?;
-                title.to_ascii_lowercase().contains(&wanted).then(|| (id.to_string(), title.to_string()))
-            });
-            hit.ok_or_else(|| format!("no app called \"{}\" on the TV", app.trim()))?
-        }
-    };
+    let (id, title) = app_id(s, app)?;
     s.request("ssap://system.launcher/launch", json!({"id": id}))?;
     Ok(format!("opened {title}"))
 }
 
-/// webOS apps take no link, so only a YouTube video can be named to one.
-/// YouTube Music has no app of its own here, so its songs go to YouTube.
+/// The id of `app` and what it's called, from the names everyone says or
+/// else from what is installed.
+fn app_id(s: &mut Session, app: &str) -> Result<(String, String), String> {
+    let wanted = app.trim().to_ascii_lowercase();
+    if let Some((_, id)) = APPS.iter().find(|(name, _)| *name == wanted) {
+        return Ok((id.to_string(), app.trim().to_string()));
+    }
+    let listed = s.request("ssap://com.webos.applicationManager/listApps", json!({}))?;
+    let apps = listed.get("apps").and_then(Value::as_array).cloned().unwrap_or_default();
+    let hit = apps.iter().find_map(|a| {
+        let title = a.get("title")?.as_str()?;
+        let id = a.get("id")?.as_str()?;
+        title.to_ascii_lowercase().contains(&wanted).then(|| (id.to_string(), title.to_string()))
+    });
+    hit.ok_or_else(|| format!("no app called \"{}\" on the TV", app.trim()))
+}
+
+/// webOS apps take no search link. YouTube takes a video's id, and an app
+/// may take a title's page; YouTube Music has no app of its own here, so
+/// its songs go to YouTube.
 fn play(s: &mut Session, app: &str, what: &str, find: &Finder) -> Result<String, String> {
-    if let Some(video) = find.find(app, what).as_ref().and_then(Pick::youtube_video) {
+    let pick = find.find(app, what);
+    if let Some(video) = pick.as_ref().and_then(Pick::youtube_video) {
         s.request("ssap://system.launcher/launch", youtube_launch(video))?;
         return Ok(watch::sent_to_youtube(what));
     }
+    if let Some(pick @ Pick::Title { link, .. }) = &pick {
+        let (id, _) = app_id(s, app)?;
+        s.request("ssap://system.launcher/launch", title_launch(&id, link))?;
+        return Ok(pick.said(what));
+    }
     launch(s, app)?;
     Ok(watch::only_opened(app, what))
+}
+
+/// A title's page, for an app to take from wherever it reads a launch.
+/// Netflix wants its own form of the link.
+fn title_launch(app: &str, link: &str) -> Value {
+    let content = match link.rsplit('/').next() {
+        Some(id) if app == "netflix" => format!("m=https://www.netflix.com/title/{id}&source_type=4"),
+        _ => link.to_string(),
+    };
+    json!({"id": app, "contentId": content, "params": {"contentTarget": link}})
 }
 
 /// Older firmware reads `contentId`, newer `contentTarget`.
@@ -587,6 +607,16 @@ mod tests {
     fn registration_presents_a_known_key() {
         assert_eq!(registration(Some("k1"))["payload"]["client-key"], "k1");
         assert!(registration(None)["payload"].get("client-key").is_none());
+    }
+
+    #[test]
+    fn a_title_is_named_the_way_its_app_reads_it() {
+        let netflix = title_launch("netflix", "https://www.netflix.com/title/80100172");
+        assert_eq!(netflix["contentId"], "m=https://www.netflix.com/title/80100172&source_type=4");
+        let prime = title_launch("amazon", "https://app.primevideo.com/detail?gti=x");
+        assert_eq!(prime["id"], "amazon");
+        assert_eq!(prime["contentId"], "https://app.primevideo.com/detail?gti=x");
+        assert_eq!(prime["params"]["contentTarget"], "https://app.primevideo.com/detail?gti=x");
     }
 
     #[test]

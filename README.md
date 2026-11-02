@@ -266,7 +266,15 @@ A local model turns the request into device actions, and home replies in the con
    - The panel also shows whether the model is ready, and the exact command to run if it isn't.
 3. To let others in a group or the lobby use your devices, press `g` in the panel or type `/home on` there. `/home off` revokes it.
 
-**Playing a title.** With `/home lookups on`, a title asked for on YouTube is sent from this machine to youtube.com and the top video starts on the TV. That covers `@home play X` with no app named, because YouTube is the default. With lookups off, which is the default, nothing is sent and the TV shows a YouTube search where it can take a link.
+**Playing a title.** `@home play Dark on netflix` works with any app [JustWatch](https://www.justwatch.com) lists, once you allow lookups with `/home lookups on`. A title is then sent from this machine to youtube.com or justwatch.com. YouTube is the default app, so `@home play X` with no app named is sent too. Lookups are off by default, and with them off nothing is sent.
+
+| App | With lookups on | With lookups off |
+|---|---|---|
+| YouTube, YouTube Music | Starts the top match | A search, if the TV takes links |
+| Netflix, Prime Video, Disney+, Hotstar and other film and TV apps | Opens the title's page, one press from playing | A search for the first three, otherwise only opens the app |
+| Spotify | A search | A search |
+
+webOS TVs take no search links, so a search there only opens the app. Titles are looked up in your country, worked out from your language setting. `/home lookups on IN` sets it. Title pages are unverified on real TVs, and an app may ignore the link.
 
 If a device is on another subnet, add it with `/home add 192.168.1.40`. `/home scan` searches again, and a bare `/home` shows the current status.
 
@@ -371,7 +379,7 @@ Without `--to`, `--say` and `--file` go to the first peer whose secure session c
 | `/home ha URL TOKEN` | connect Home Assistant and list its devices |
 | `/home ha find` | look for a Home Assistant announcing itself, and say its address |
 | `/home ha forget` | disconnect Home Assistant and remove its devices |
-| `/home lookups on\|off` | let titles asked for on the TV be looked up on the internet; off by default |
+| `/home lookups on [COUNTRY]\|off` | let titles asked for on the TV be looked up on the internet; off by default |
 | `/home model NAME` | choose the Ollama model |
 | `/ai on\|off` | let everyone here ask your model, or stop |
 | `/ai forget` | clear this conversation's model memory |

@@ -83,7 +83,7 @@ impl Home {
             ),
             tool(
                 "tv_play",
-                "Put on a particular song, video, film or show in an app on the TV. Its answer says how far that got, which may be short of playing.",
+                "Put on a particular song, video, film or show in an app on the TV, any app they name. Its answer says how far that got, which may be short of playing.",
                 pick(json!({
                     "what": {"type": "string", "description": "the title, as said, with the artist if they gave one"},
                     "app": {"type": "string", "description": "the app they named; leave out to use YouTube"},
@@ -121,7 +121,7 @@ impl Home {
                 Some(what) => {
                     let what: String = what.chars().take(MAX_TITLE).collect();
                     let app = text(args, "app").unwrap_or_else(|| "YouTube".into());
-                    let find = Finder::new(self.config.lookups);
+                    let find = Finder::new(self.config.lookups.then(|| self.config.region()).as_deref());
                     let played = self.on_tv(args, |tv, d| tv.play(d, &app, &what, &find));
                     if find.missed() {
                         self.note("home: YouTube's results page had no video on it; its layout may have changed".into());

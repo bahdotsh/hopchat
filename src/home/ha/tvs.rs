@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn a_tv_that_takes_links_gets_one() {
         let (fake, mut d) = tv_with(PLAY_MEDIA, 200);
-        let said = HaTv.play(&mut d, "netflix", "Dark", &Finder::new(false)).unwrap();
+        let said = HaTv.play(&mut d, "netflix", "Dark", &Finder::new(None)).unwrap();
         assert!(said.contains("nothing plays"), "{said}");
         assert!(asked(&fake, "netflix.com/search?q=Dark"));
         assert!(!asked(&fake, "select_source"));
@@ -280,7 +280,7 @@ mod tests {
     #[test]
     fn a_refused_link_still_opens_the_app() {
         let (fake, mut d) = tv_with(PLAY_MEDIA, 400);
-        let said = HaTv.play(&mut d, "netflix", "Dark", &Finder::new(false)).unwrap();
+        let said = HaTv.play(&mut d, "netflix", "Dark", &Finder::new(None)).unwrap();
         assert!(said.contains("nothing is playing"), "{said}");
         assert!(asked(&fake, "play_media") && asked(&fake, "select_source"));
     }
