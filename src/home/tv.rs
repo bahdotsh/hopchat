@@ -8,7 +8,11 @@ use serde_json::{json, Value};
 
 use super::assistant::{flag, number, text, tool};
 use super::driver::backend_of;
+use super::watch::Finder;
 use super::{Device, Home};
+
+/// The longest title sent anywhere; the model can say what it likes.
+const MAX_TITLE: usize = 200;
 
 pub trait TvDriver: Sync {
     fn power(&self, d: &mut Device, on: bool) -> Result<String, String>;
@@ -17,6 +21,11 @@ pub trait TvDriver: Sync {
     fn status(&self, d: &mut Device) -> Result<String, String>;
     fn open_app(&self, d: &mut Device, _app: &str) -> Result<String, String> {
         Err(format!("{} can't open apps", d.name))
+    }
+    /// Puts on `what` in `app`, as far as the TV lets it, and says how far
+    /// that was.
+    fn play(&self, d: &mut Device, _app: &str, _what: &str, _find: &Finder) -> Result<String, String> {
+        Err(format!("{} can't play a chosen title", d.name))
     }
     fn input(&self, d: &mut Device, _input: &str) -> Result<String, String> {
         Err(format!("{} can't switch inputs", d.name))
@@ -69,8 +78,16 @@ impl Home {
             ),
             tool(
                 "tv_open_app",
-                "Open an app on the TV, such as Netflix, YouTube, Prime Video, Disney+, Spotify or Live TV.",
+                "Open an app on the TV, such as Netflix, YouTube, Prime Video, Disney+, Spotify or Live TV. This only opens it; use tv_play for a particular song, video, film or show.",
                 pick(json!({"app": {"type": "string"}})),
+            ),
+            tool(
+                "tv_play",
+                "Put on a particular song, video, film or show in an app on the TV, any app they name. Its answer says how far that got, which may be short of playing.",
+                pick(json!({
+                    "what": {"type": "string", "description": "the title, as said, with the artist if they gave one"},
+                    "app": {"type": "string", "description": "the app they named; leave out to use YouTube"},
+                })),
             ),
             tool("tv_input", "Switch the TV's input, such as HDMI_1.", pick(json!({"input": {"type": "string"}}))),
             tool(
@@ -99,6 +116,19 @@ impl Home {
             "tv_open_app" => match text(args, "app") {
                 Some(app) => self.on_tv(args, |tv, d| tv.open_app(d, &app)),
                 None => Err("which app?".into()),
+            },
+            "tv_play" => match text(args, "what") {
+                Some(what) => {
+                    let what: String = what.chars().take(MAX_TITLE).collect();
+                    let app = text(args, "app").unwrap_or_else(|| "YouTube".into());
+                    let find = Finder::new(self.config.lookups.then(|| self.config.region()).as_deref());
+                    let played = self.on_tv(args, |tv, d| tv.play(d, &app, &what, &find));
+                    if find.missed() {
+                        self.note("home: YouTube's results page had no video on it; its layout may have changed".into());
+                    }
+                    played
+                }
+                None => Err("play what?".into()),
             },
             "tv_input" => match text(args, "input") {
                 Some(input) => self.on_tv(args, |tv, d| tv.input(d, &input)),

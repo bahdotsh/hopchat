@@ -69,6 +69,8 @@ const SERVICE: &str = "_home-assistant._tcp.local.";
 const NATIVE: &[&str] = &["wiz", "webostv", "androidtv_remote"];
 /// The most of an answer to read. A big home's `/api/states` runs to
 /// megabytes, past the HTTP client's own 10 MB default.
+const STILL_ON_IT: &str = "Home Assistant is still on it";
+const TOOK_TOO_LONG: &str = "Home Assistant took too long to say whether it worked";
 const MAX_ANSWER: u64 = 64 * 1024 * 1024;
 /// `LightEntityFeature::FLASH`.
 const LIGHT_FLASH: u64 = 8;
@@ -282,8 +284,8 @@ impl Hub {
         match self.call_within(service, entity, body, wait) {
             Ok(now) => Ok(now.as_ref().map(describe)),
             Err(e) if e == SLOW => Err(match self.state(entity) {
-                Ok(state) => format!("Home Assistant is still on it; so far it is {}", describe(&state)),
-                Err(_) => "Home Assistant took too long to say whether it worked; it may still happen".into(),
+                Ok(state) => format!("{STILL_ON_IT}; so far it is {}", describe(&state)),
+                Err(_) => format!("{TOOK_TOO_LONG}; it may still happen"),
             }),
             Err(e) => Err(e),
         }
@@ -495,6 +497,11 @@ fn wanted(entry: &Value) -> bool {
 
 fn features(state: &Value) -> u64 {
     state["attributes"].get("supported_features").and_then(Value::as_u64).unwrap_or(0)
+}
+
+/// Whether a `drive` error means the call may yet work, not that it failed.
+fn undecided(e: &str) -> bool {
+    e.starts_with(STILL_ON_IT) || e.starts_with(TOOK_TOO_LONG)
 }
 
 /// How a backend puts an entity's state into words.

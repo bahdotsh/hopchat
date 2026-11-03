@@ -17,7 +17,7 @@
 
 hopchat is a terminal chat app built on the [Offline Protocol SDK](https://github.com/Offline-Protocol/offline-protocol-sdk) and [ratatui](https://ratatui.rs). Peers on the same network find each other on their own, and every conversation is end-to-end encrypted with MLS (RFC 9420).
 
-It's also a remote control for the room you're in. Mention `@home` to dim the lights or put something on the TV, and `@ai` to ask a local model. One person's model can answer for the whole group, and nothing leaves your network.
+It's also a remote control for the room you're in. Mention `@home` to dim the lights or put something on the TV, and `@ai` to ask a local model. One person's model can answer for the whole group, and nothing leaves your network unless you turn on title lookups with `/home lookups on`.
 
 ## Table of contents
 
@@ -247,6 +247,8 @@ Mention `@home` in Me, the lobby or any group you're in:
 @home dim the lights to 20% and put on netflix
 @home make the lamp purple
 @home turn the tv down a bit
+@home play Ithinno Aadame on jstv
+@home search netflix for Dark
 @home is the light on?
 @home turn on the kettle
 ```
@@ -263,6 +265,16 @@ A local model turns the request into device actions, and home replies in the con
    - **Printer or copier:** Enter adds it, `t` makes it beep or flash if it supports that, and `n` names it. Home can then say whether it is printing, how much ink or toner is left, and whether it is jammed or out of paper. It never prints anything. A printer a computer shares through CUPS isn't listed, since a network printer is found on its own; a USB printer behind a print server therefore doesn't show up.
    - The panel also shows whether the model is ready, and the exact command to run if it isn't.
 3. To let others in a group or the lobby use your devices, press `g` in the panel or type `/home on` there. `/home off` revokes it.
+
+**Playing a title.** `@home play Dark on netflix` works with any app [JustWatch](https://www.justwatch.com) lists, once you allow lookups with `/home lookups on`. A title is then sent from this machine to youtube.com or justwatch.com. YouTube is the default app, so `@home play X` with no app named is sent too. Lookups are off by default, and with them off nothing is sent.
+
+| App | With lookups on | With lookups off |
+|---|---|---|
+| YouTube, YouTube Music | Starts the top match | A search, if the TV takes links |
+| Netflix, Prime Video, Disney+, Hotstar and other film and TV apps | Opens the title's page, one press from playing | A search for the first three, otherwise only opens the app |
+| Spotify | A search | A search |
+
+webOS TVs take no search links, so a search there only opens the app. Titles are looked up in your country, worked out from your language setting. `/home lookups on IN` sets it. Title pages are unverified on real TVs, and an app may ignore the link.
 
 If a device is on another subnet, add it with `/home add 192.168.1.40`. `/home scan` searches again, and a bare `/home` shows the current status.
 
@@ -367,6 +379,7 @@ Without `--to`, `--say` and `--file` go to the first peer whose secure session c
 | `/home ha URL TOKEN` | connect Home Assistant and list its devices |
 | `/home ha find` | look for a Home Assistant announcing itself, and say its address |
 | `/home ha forget` | disconnect Home Assistant and remove its devices |
+| `/home lookups on [COUNTRY]\|off` | let titles asked for on the TV be looked up on the internet; off by default |
 | `/home model NAME` | choose the Ollama model |
 | `/ai on\|off` | let everyone here ask your model, or stop |
 | `/ai forget` | clear this conversation's model memory |

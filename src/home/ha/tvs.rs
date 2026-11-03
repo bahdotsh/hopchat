@@ -2,10 +2,14 @@
 
 use serde_json::{json, Value};
 
-use super::{features, sayable, MAX_SOURCES_SAID, VOLUME_SET, VOLUME_STEP, called, check_entity, entity, Hub};
+use super::{features, sayable, undecided, MAX_SOURCES_SAID, VOLUME_SET, VOLUME_STEP, called, check_entity, entity, Hub};
 use crate::home::driver::{Backend, Category};
 use crate::home::{Device, State};
 use crate::home::tv::TvDriver;
+use crate::home::watch::{self, Finder};
+
+/// The bit in `supported_features` that says a player takes `play_media`.
+const PLAY_MEDIA: u64 = 512;
 
 /// TVs Home Assistant drives, as media players.
 pub struct HaTv;
@@ -123,6 +127,27 @@ impl TvDriver for HaTv {
         self.source(d, app)
     }
 
+    /// Whether a link gets through is up to the integration behind the
+    /// TV: the feature bit only says it takes `play_media`, not links. One
+    /// that refuses still gets the app opened.
+    fn play(&self, d: &mut Device, app: &str, what: &str, find: &Finder) -> Result<String, String> {
+        let hub = Hub::of(d)?;
+        let entity = entity(d)?;
+        if features(&hub.state(entity)?) & PLAY_MEDIA != 0
+            && let Some(pick) = find.find(app, what)
+        {
+            let body = json!({"media_content_type": "url", "media_content_id": pick.link()});
+            match hub.drive("media_player.play_media", entity, body, describe_tv) {
+                Ok(_) => return Ok(pick.said(what)),
+                // HA may yet do it; opening the app now would undo that.
+                Err(e) if undecided(&e) => return Err(e),
+                Err(_) => {}
+            }
+        }
+        self.source(d, app)?;
+        Ok(watch::only_opened(app, what))
+    }
+
     fn input(&self, d: &mut Device, input: &str) -> Result<String, String> {
         self.source(d, input)
     }
@@ -216,6 +241,49 @@ mod tests {
 
     use super::super::fake::Fake;
     use super::*;
+
+    fn tv_with(features: u64, play_media: u16) -> (Fake, Device) {
+        let fake = Fake::start("t", None, move |method, path, _| match (method, path) {
+            ("POST", p) if p.ends_with("play_media") => (play_media, "[]".into()),
+            ("POST", _) => (200, "[]".into()),
+            _ => (200, json!({"entity_id": "media_player.tv", "state": "on", "attributes": {
+                "supported_features": features, "source_list": ["Netflix", "YouTube"],
+            }}).to_string()),
+        });
+        let hub = Hub { url: fake.url.clone(), token: "t".into() };
+        let device = Device { unit: Some("media_player.tv".into()), hub: Some(hub), ..Device::new("ha_tv", "TV".into(), [127, 0, 0, 1].into(), None, json!({})) };
+        (fake, device)
+    }
+
+    fn asked(fake: &Fake, what: &str) -> bool {
+        fake.asked.lock().unwrap().iter().any(|a| a.contains(what))
+    }
+
+    #[test]
+    fn a_tv_that_takes_links_gets_one() {
+        let (fake, mut d) = tv_with(PLAY_MEDIA, 200);
+        let said = HaTv.play(&mut d, "netflix", "Dark", &Finder::new(None)).unwrap();
+        assert!(said.contains("nothing plays"), "{said}");
+        assert!(asked(&fake, "netflix.com/search?q=Dark"));
+        assert!(!asked(&fake, "select_source"));
+    }
+
+    #[test]
+    fn a_tv_that_cant_take_links_never_causes_a_lookup() {
+        let (fake, mut d) = tv_with(0, 200);
+        let find = Finder::with(|_| panic!("the title left the network for nothing"));
+        let said = HaTv.play(&mut d, "youtube", "x", &find).unwrap();
+        assert!(said.contains("nothing is playing"), "{said}");
+        assert!(asked(&fake, "select_source") && !asked(&fake, "play_media"));
+    }
+
+    #[test]
+    fn a_refused_link_still_opens_the_app() {
+        let (fake, mut d) = tv_with(PLAY_MEDIA, 400);
+        let said = HaTv.play(&mut d, "netflix", "Dark", &Finder::new(None)).unwrap();
+        assert!(said.contains("nothing is playing"), "{said}");
+        assert!(asked(&fake, "play_media") && asked(&fake, "select_source"));
+    }
 
     #[test]
     fn volume_mutes_then_steps_where_it_cant_be_set() {

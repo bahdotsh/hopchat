@@ -103,7 +103,8 @@ impl Home {
              The devices are:\n{}\n\
              Each message starts with the sender's name. Use the tools to do what they ask, and \
              check state with a status tool when they ask how things are. Never invent device \
-             state. {}A light that only does white tones cannot show colours; say so instead of \
+             state. Only say something is playing if tv_play or tv_media said so; when tv_play says \
+             it only opened an app or a page, or searched, tell them that instead. {}A light that only does white tones cannot show colours; say so instead of \
              trying. After acting, reply with one short, friendly sentence saying what you did. \
              If a request has nothing to do with the devices, say briefly that you only handle \
              the devices.{}",

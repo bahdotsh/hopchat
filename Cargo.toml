@@ -57,7 +57,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 sha2 = { version = "0.10.9", features = ["oid"] }
 unicode-width = "0.2.2"
 tungstenite = { version = "0.30", default-features = false, features = ["handshake", "native-tls"] }
-ureq = { version = "3", default-features = false, features = ["json", "native-tls-no-default"] }
+ureq = { version = "3", default-features = false, features = ["json", "native-tls"] }
 native-tls = "0.2"
 mdns-sd = "0.21.6"
 aes = "0.8"

@@ -30,6 +30,7 @@ mod switch;
 mod tv;
 pub mod webos;
 mod tuya;
+mod watch;
 pub mod wiz;
 
 use std::collections::{HashMap, HashSet};
@@ -174,6 +175,13 @@ pub struct Config {
     /// Whether group members may borrow this machine's model.
     #[serde(default = "yes")]
     pub share: bool,
+    /// Whether a title asked for on the TV may be looked up off the network.
+    #[serde(default)]
+    pub lookups: bool,
+    /// The two-letter country whose catalogue a title is looked up in, when
+    /// it isn't the one this machine's language setting implies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
     /// The Home Assistant whose entities a scan lists and every HA device
     /// is driven through: the one place its token is kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -227,6 +235,19 @@ fn ollama_url(host: &str) -> String {
     format!("{scheme}://{name}:{port}")
 }
 
+impl Config {
+    /// The country to look titles up in.
+    fn region(&self) -> String {
+        self.country.clone().unwrap_or_else(|| country_of(&std::env::var("LANG").unwrap_or_default()))
+    }
+}
+
+/// The country in a locale such as `en_IN.UTF-8`, or the US without one.
+fn country_of(locale: &str) -> String {
+    let country = locale.split('.').next().and_then(|l| l.split_once('_')).map_or("", |(_, c)| c);
+    if country.len() == 2 && country.bytes().all(|b| b.is_ascii_uppercase()) { country.into() } else { "US".into() }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -236,6 +257,8 @@ impl Default for Config {
             model: default_model(),
             ollama: default_ollama(),
             share: true,
+            lookups: false,
+            country: None,
             ha: None,
             bulb: None,
             tv: None,
@@ -991,6 +1014,25 @@ impl Home {
                 self.offer();
                 self.check_model();
                 format!("home will use {}", self.config.model)
+            }
+            ("lookups", Some(value @ ("on" | "off"))) => {
+                let country = words.next().map(str::to_ascii_uppercase);
+                if let Some(country) = country.filter(|_| value == "on") {
+                    if country.len() != 2 || !country.bytes().all(|b| b.is_ascii_uppercase()) {
+                        return format!("{country} isn't a two-letter country code");
+                    }
+                    self.config.country = Some(country);
+                }
+                self.config.lookups = value == "on";
+                self.save();
+                if self.config.lookups {
+                    format!("titles asked for on the TV now go to youtube.com and justwatch.com, looked up for {}", self.config.region())
+                } else {
+                    "titles stay on this network; YouTube gets a search on the TV instead".into()
+                }
+            }
+            ("lookups", _) => {
+                format!("lookups are {}; /home lookups on [COUNTRY] or off", if self.config.lookups { "on" } else { "off" })
             }
             ("scan", _) => {
                 self.scan();
@@ -1750,7 +1792,7 @@ mod tests {
             home.add(&id);
         }
         let tools = home.tools().to_string();
-        assert!(tools.contains("light_set") && tools.contains("tv_open_app") && tools.contains("switch_set"));
+        assert!(tools.contains("light_set") && tools.contains("tv_open_app") && tools.contains("tv_play") && tools.contains("switch_set"));
         println!("{}", home.system_prompt());
         let run = |home: &mut Home, tool: &str, args: Value| home.run_tool(tool, &args).unwrap();
         assert_eq!(run(&mut home, "light_set", json!({"light": "bed light", "brightness": "25%", "color": "blue"})), "Bed Light is now on · 25% · #0000ff");
@@ -2108,6 +2150,33 @@ mod tests {
 
     fn ha_device(backend: &str, unit: &str, hub: &ha::Hub) -> Device {
         Device { unit: Some(unit.into()), hub: Some(hub.clone()), ..Device::new(backend, unit.into(), [127, 0, 0, 1].into(), None, json!({})) }
+    }
+
+    #[test]
+    fn tv_play_needs_a_title_and_defaults_to_youtube() {
+        let fake = ha::fake::Fake::start("t", None, |_, _, _| {
+            (200, json!({"state": "on", "attributes": {"source_list": ["YouTube"]}}).to_string())
+        });
+        let mut home = home_with(vec![ha_device("ha_tv", "media_player.tv", &hub(&fake.url, "t"))]);
+        home.config.ha = Some(hub(&fake.url, "t"));
+        assert_eq!(home.run_tool("tv_play", &json!({})).unwrap_err(), "play what?");
+        let said = home.run_tool("tv_play", &json!({"what": "x"})).unwrap();
+        assert!(said.starts_with("opened YouTube"), "{said}");
+    }
+
+    #[test]
+    fn lookups_stay_off_until_asked_for() {
+        let mut home = home_with(Vec::new());
+        assert!(!home.config.lookups);
+        assert!(home.configure(None, "lookups").contains("off"));
+        assert!(home.configure(None, "lookups on in").contains("for IN"));
+        assert!(home.config.lookups);
+        assert!(home.configure(None, "lookups on india").contains("isn't a two-letter"));
+        assert_eq!(home.config.country.as_deref(), Some("IN"));
+        assert_eq!(country_of("en_GB.UTF-8"), "GB");
+        assert_eq!(country_of("C"), "US");
+        home.configure(None, "lookups off");
+        assert!(!home.config.lookups);
     }
 
     #[test]
