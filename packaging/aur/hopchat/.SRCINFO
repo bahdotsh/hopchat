@@ -1,6 +1,6 @@
 pkgbase = hopchat
 	pkgdesc = Offline, end-to-end encrypted terminal chat for your local network. No server, no internet, no accounts.
-	pkgver = 0.1.0
+	pkgver = 0.2.0
 	pkgrel = 1
 	url = https://github.com/bahdotsh/hopchat
 	arch = x86_64
@@ -9,7 +9,7 @@ pkgbase = hopchat
 	makedepends = cargo
 	depends = gcc-libs
 	depends = openssl
-	source = hopchat-0.1.0.tar.gz::https://github.com/bahdotsh/hopchat/archive/refs/tags/v0.1.0.tar.gz
-	sha256sums = 65d164e10146fbf1cddfb75f20bbe0daa7c9cb13771270305c319f6c977b1087
+	source = hopchat-0.2.0.tar.gz::https://github.com/bahdotsh/hopchat/archive/refs/tags/v0.2.0.tar.gz
+	sha256sums = fc7d9a238a841fce093049c96545d110cdbe65a3418e3fa315699e4b51b5cb89
 
 pkgname = hopchat

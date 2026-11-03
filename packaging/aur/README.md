@@ -51,7 +51,7 @@ latest commit automatically. Push only when the PKGBUILD itself changes
 ## Notes
 
 - `hopchat` points at `https://github.com/bahdotsh/hopchat/archive/refs/tags/v$pkgver.tar.gz`.
-  The reference copy here carries the verified sum for v0.1.0. The copy on
+  The reference copy here carries the verified sum for v0.2.0. The copy on
   the AUR must match it: it still had `SKIP` when v0.1.0 was released.
 - The AUR packages link the system `openssl`. Only the prebuilt release
   tarballs and the AppImage bundle it (the `vendored-openssl` feature).

@@ -1,7 +1,7 @@
 # Maintainer: 9M2PJU <9m2pju@gmail.com>
 # Contributor: bahdotsh (upstream author)
 pkgname=hopchat
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Offline, end-to-end encrypted terminal chat for your local network. No server, no internet, no accounts."
 arch=('x86_64' 'aarch64')
@@ -12,7 +12,7 @@ makedepends=('cargo')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/bahdotsh/hopchat/archive/refs/tags/v$pkgver.tar.gz")
 # Deliberately not SKIP: a fixed release tarball must be verified. Run
 # `updpkgsums` after bumping pkgver (see ../README.md).
-sha256sums=('65d164e10146fbf1cddfb75f20bbe0daa7c9cb13771270305c319f6c977b1087')
+sha256sums=('fc7d9a238a841fce093049c96545d110cdbe65a3418e3fa315699e4b51b5cb89')
 
 prepare() {
   cd "$pkgname-$pkgver"
