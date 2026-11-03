@@ -105,15 +105,15 @@ Debian/Ubuntu and Fedora/RHEL: grab the `.deb` / `.rpm` from the
 through the package manager pulls in OpenSSL if it is missing:
 
 ```sh
-sudo apt install ./hopchat_0.1.0-1_amd64.deb       # Debian/Ubuntu
-sudo dnf install ./hopchat-0.1.0-1.x86_64.rpm      # Fedora/RHEL
+sudo apt install ./hopchat_0.2.0-1_amd64.deb       # Debian/Ubuntu
+sudo dnf install ./hopchat-0.2.0-1.x86_64.rpm      # Fedora/RHEL
 ```
 
 AppImage (x86_64 Linux, glibc 2.35+, nothing else to install):
 
 ```sh
-chmod +x hopchat-0.1.0-linux-x86_64.AppImage
-./hopchat-0.1.0-linux-x86_64.AppImage --name alice
+chmod +x hopchat-0.2.0-linux-x86_64.AppImage
+./hopchat-0.2.0-linux-x86_64.AppImage --name alice
 ```
 
 Every release lists the SHA-256 of each file in `SHA256SUMS`. To check a
@@ -123,7 +123,7 @@ repository's release workflow, verify its build provenance with the
 [GitHub CLI](https://cli.github.com):
 
 ```sh
-gh attestation verify hopchat-0.1.0-linux-x86_64.tar.gz --repo bahdotsh/hopchat
+gh attestation verify hopchat-0.2.0-linux-x86_64.tar.gz --repo bahdotsh/hopchat
 ```
 
 From [crates.io](https://crates.io/crates/hopchat) with cargo (builds the
