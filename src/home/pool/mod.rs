@@ -23,6 +23,7 @@
 
 mod llama;
 
+use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -96,6 +97,19 @@ pub fn admit(wire: Wire, shares: impl Fn(&str) -> bool) -> Result<Wire, Wire> {
             Err(Wire::Refuse { id: id.clone(), error: "isn't in that group with you".into() })
         }
         wire => Ok(wire),
+    }
+}
+
+/// What to tell `peer` about this machine giving `giving`, remembering in
+/// `told` who heard it gives. Nothing is said to someone never told it
+/// gives: clients older than pools would show the message as chat.
+pub fn give_wire(giving: Option<u64>, told: &mut HashSet<String>, peer: &str) -> Option<Wire> {
+    match giving {
+        Some(mem) => {
+            told.insert(peer.to_string());
+            Some(Wire::Give { mem })
+        }
+        None => told.remove(peer).then_some(Wire::Keep),
     }
 }
 

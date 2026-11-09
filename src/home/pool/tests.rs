@@ -83,6 +83,18 @@ fn the_engine_turns_away_invitations_from_outside_the_group() {
 }
 
 #[test]
+fn only_those_told_a_machine_gives_hear_it_stopped() {
+    let mut told = HashSet::new();
+    // Never gave: nothing is said, so older clients see no stray message.
+    assert_eq!(give_wire(None, &mut told, "old"), None);
+    assert_eq!(give_wire(Some(8), &mut told, "a"), Some(Wire::Give { mem: 8 }));
+    assert_eq!(give_wire(None, &mut told, "a"), Some(Wire::Keep));
+    // Told once is enough.
+    assert_eq!(give_wire(None, &mut told, "a"), None);
+    assert!(told.is_empty());
+}
+
+#[test]
 fn a_pool_only_writes_plain_answers() {
     assert!(takes(None));
     assert!(takes(Some(&Value::Null)));

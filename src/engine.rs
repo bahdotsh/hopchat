@@ -1,7 +1,7 @@
 //! Owns the `OfflineProtocol` instance on one thread and pumps it: network
 //! frames in, UI commands in, protocol events and chat messages out.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -238,6 +238,9 @@ pub struct Engine {
     giving: Option<u64>,
     /// Peers who give to pools, and how much memory.
     givers: HashMap<String, u64>,
+    /// Peers told this machine gives, so only they hear when it stops.
+    /// Older clients don't know pool messages and would show them as chat.
+    told_give: HashSet<String>,
 }
 
 struct Borrow {
@@ -327,6 +330,7 @@ pub fn open(
             lenders: HashMap::new(),
             giving: None,
             givers: HashMap::new(),
+            told_give: HashSet::new(),
             borrows: HashMap::new(),
         },
         me,
@@ -507,7 +511,8 @@ impl Engine {
             Input::Ui(Command::PoolGive(mem)) => {
                 if mem != self.giving {
                     self.giving = mem;
-                    let peers: Vec<String> = self.streams.keys().cloned().collect();
+                    let mut peers: Vec<String> = self.streams.keys().cloned().collect();
+                    peers.extend(self.told_give.iter().filter(|p| !self.streams.contains_key(*p)).cloned());
                     for peer in peers {
                         self.give_to(&peer);
                     }
@@ -720,16 +725,16 @@ impl Engine {
         }
     }
 
-    /// Tells `peer` whether this machine gives to pools.
+    /// Tells `peer` this machine gives to pools, or that it stopped. Nobody
+    /// hears anything about pools until this machine has given once, and
+    /// only those told it gives are told it stopped.
     fn give_to(&mut self, peer: &str) {
         if !self.session_ready(peer) {
             return;
         }
-        let wire = match self.giving {
-            Some(mem) => home::pool::Wire::Give { mem },
-            None => home::pool::Wire::Keep,
-        };
-        self.send_pool(peer, &wire);
+        if let Some(wire) = home::pool::give_wire(self.giving, &mut self.told_give, peer) {
+            self.send_pool(peer, &wire);
+        }
     }
 
     /// Where a directly connected peer's stream comes from.
@@ -996,6 +1001,8 @@ impl Engine {
         if self.givers.remove(address).is_some() {
             self.tell_home_givers();
         }
+        // It forgets this machine gives when it loses it, too.
+        self.told_give.remove(address);
         if let Some(home) = &self.home {
             let who = self.nick_or_address(address);
             let _ = home.send(home::Request::PoolPeerGone { address: address.to_string(), who });
