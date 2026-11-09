@@ -491,6 +491,21 @@ fn giving_off_where_a_pool_runs_leaves_it() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn a_worker_whose_rpc_server_stops_leaves_the_pool() {
+    let root = scratch("pool-rpc-gone");
+    let mut gina = helping(&root);
+    // From a pool long gone: nothing happens.
+    gina.home.handle(Request::PoolEnded { id: "p0".into(), why: "old".into() });
+    assert!(gina.home.pools.serving.is_some());
+    gina.home.handle(Request::PoolEnded { id: "p1".into(), why: "crashed".into() });
+    assert!(gina.home.pools.serving.is_none());
+    let told = sent(&gina);
+    assert!(matches!(told.as_slice(), [(to, Wire::Leave { .. })] if to == "hank"), "{told:?}");
+    assert!(notes(&gina).iter().any(|n| n.contains("crashed")));
+    let _ = fs::remove_dir_all(root);
+}
+
 /// `side` hosting a loaded pool of `m` in `g`, with `gina` in it, answered
 /// at `url`.
 fn ready(side: &mut Side, url: &str) {
@@ -515,6 +530,29 @@ fn ready(side: &mut Side, url: &str) {
         url: Some(url.into()),
         started: Instant::now(),
     });
+}
+
+#[test]
+fn a_pool_whose_llama_server_stops_is_over() {
+    let root = scratch("pool-server-gone");
+    let mut hank = side(&root, "hank", &root);
+    ready(&mut hank, "http://127.0.0.1:9");
+    hank.home.handle(Request::PoolEnded { id: "p8".into(), why: "old".into() });
+    assert!(hank.home.pools.url().is_some(), "another pool's end changes nothing");
+    hank.home.handle(Request::PoolEnded { id: "p9".into(), why: "out of memory".into() });
+    assert!(hank.home.pools.hosting.is_none());
+    let mut left = false;
+    let mut said = String::new();
+    for input in hank.engine.try_iter() {
+        match input {
+            Input::Ui(Command::PoolSend { to, wire: Wire::Leave { .. } }) => left |= to == "gina",
+            Input::Ui(Command::SendGroup { group, text, .. }) if group == "g" => said = text,
+            _ => {}
+        }
+    }
+    assert!(left, "gina should be told the pool is over");
+    assert!(said.contains("is over") && said.contains("out of memory"), "{said}");
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]

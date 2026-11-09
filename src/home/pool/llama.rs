@@ -218,6 +218,21 @@ pub fn wait_for_health(url: &str, server: &Process, log: &Path) -> Result<(), St
     Err("loading took too long".into())
 }
 
+/// How often a running server is checked for having stopped.
+const WATCH: Duration = Duration::from_secs(1);
+
+/// Waits until `process` stops, however long that is, and says why: its
+/// last error in `log`, or how `name` ended.
+pub fn watch(process: &Process, name: &str, log: &Path) -> String {
+    loop {
+        if let Some(status) = process.exited() {
+            let why = last_error(log, process.log_from).unwrap_or_else(|| format!("{name} stopped ({status})"));
+            return format!("{why} (more in {})", log.display());
+        }
+        thread::sleep(WATCH);
+    }
+}
+
 /// The last line of `log` past byte `from` that sounds like an error, so
 /// an earlier run's errors are never blamed for this one.
 fn last_error(log: &Path, from: u64) -> Option<String> {
@@ -384,6 +399,18 @@ mod tests {
         assert!(process.exited().unwrap().contains('3'));
         assert_eq!(last_error(&log, process.log_from), None);
         assert_eq!(last_error(&log, 0).as_deref(), Some("error: from a run long ago"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_watched_process_that_stops_says_why() {
+        let dir = scratch("watch");
+        let log = dir.join("log");
+        let process = Process::start(Path::new("/bin/sh"), ["-c", "echo 'error: out of memory'; exit 1"], &[], &log).unwrap();
+        let why = watch(&process, "llama-server", &log);
+        assert!(why.starts_with("error: out of memory"), "{why}");
+        let quiet = Process::start(Path::new("/bin/sh"), ["-c", "exit 2"], &[], &log).unwrap();
+        assert!(watch(&quiet, "llama-server", &log).starts_with("llama-server stopped"));
         let _ = fs::remove_dir_all(dir);
     }
 

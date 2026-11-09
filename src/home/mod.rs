@@ -427,6 +427,8 @@ pub enum Request {
     PoolServing { id: String, result: Result<tunnel::Listener, String> },
     /// The host's llama-server loaded pool `id`'s model, or why not.
     PoolLoaded { id: String, result: Result<(), String> },
+    /// A llama.cpp server this machine runs for pool `id` stopped, and why.
+    PoolEnded { id: String, why: String },
 }
 
 /// A device name as it may be kept: one line, not too long.
@@ -694,6 +696,7 @@ impl Home {
             Request::PoolReached { id, result } => self.pool_reached(id, result),
             Request::PoolServing { id, result } => self.pool_serving(id, result),
             Request::PoolLoaded { id, result } => self.pool_loaded(id, result),
+            Request::PoolEnded { id, why } => self.pool_ended(id, why),
         }
     }
 

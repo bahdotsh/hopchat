@@ -584,7 +584,13 @@ impl Home {
             let result = llama::wait_for_port(port, &process, &log).and_then(|()| {
                 tunnel::serve(key, ip, SocketAddr::from((Ipv4Addr::LOCALHOST, port))).map_err(|e| e.to_string())
             });
-            let _ = me.send(Request::PoolServing { id, result });
+            let serving = result.is_ok();
+            let _ = me.send(Request::PoolServing { id: id.clone(), result });
+            // A worker whose RPC server stopped can't help any more.
+            if serving {
+                let why = llama::watch(&process, "llama.cpp's RPC server", &log);
+                let _ = me.send(Request::PoolEnded { id, why });
+            }
         });
         let place = if group == LOBBY { "the lobby" } else { "your group" };
         self.note(format!(
@@ -736,13 +742,33 @@ impl Home {
         let me = self.me.clone();
         thread::spawn(move || {
             let result = llama::wait_for_health(&url, &process, &log);
-            let _ = me.send(Request::PoolLoaded { id, result });
+            let loaded = result.is_ok();
+            let _ = me.send(Request::PoolLoaded { id: id.clone(), result });
+            // Once loaded, a pool that loses llama-server is over.
+            if loaded {
+                let why = llama::watch(&process, "llama-server", &log);
+                let _ = me.send(Request::PoolEnded { id, why });
+            }
         });
         self.say_as(
             &group,
             AI_SIGNATURE,
             format!("is loading {model} across this machine and {}. This can take a few minutes.", names.join(", ")),
         );
+    }
+
+    /// A llama.cpp server this machine runs for pool `id` stopped by itself.
+    /// A stop this machine asked for arrives here too, after the pool is
+    /// gone, and is ignored.
+    pub(super) fn pool_ended(&mut self, id: String, why: String) {
+        if self.pools.serving.as_ref().is_some_and(|s| s.id == id) {
+            let host = self.pools.serving.as_ref().map(|s| s.host_nick.clone()).unwrap_or_default();
+            self.pool_stop_serving(true);
+            self.note(format!("pool: stopped helping {host}'s pool: {why}"));
+        }
+        if self.pools.hosting.as_ref().is_some_and(|h| h.id == id) {
+            self.pool_stop_hosting(Some(format!("llama-server stopped: {why}")));
+        }
     }
 
     /// llama-server finished loading, or gave up.
