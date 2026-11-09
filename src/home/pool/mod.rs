@@ -425,8 +425,14 @@ impl Home {
     /// The engine said who gives in the pool's group.
     pub(super) fn pool_found(&mut self, id: String, givers: Vec<Giver>) {
         let Some(h) = self.pools.hosting.as_mut().filter(|h| h.id == id && h.phase == Phase::Finding) else { return };
+        let mut unlinked = Vec::new();
         for g in givers {
-            let Some(ip) = g.ip else { continue };
+            // A pool's RPC needs a direct connection; one through other
+            // machines can't carry it.
+            let Some(ip) = g.ip else {
+                unlinked.push(g.nick);
+                continue;
+            };
             let key = tunnel::secret();
             let wire = Wire::Join {
                 id: id.clone(),
@@ -437,13 +443,22 @@ impl Home {
             let _ = self.engine.send(Input::Ui(Command::PoolSend { to: g.address.clone(), wire }));
             h.members.push(Member { address: g.address, nick: g.nick, mem: g.mem, ip, key, ready: None, refused: false });
         }
+        let unlinked = match unlinked.as_slice() {
+            [] => None,
+            [one] => Some(format!("{one} gives but isn't directly connected to you, so can't join")),
+            many => Some(format!("{} give but aren't directly connected to you, so can't join", many.join(", "))),
+        };
         if h.members.is_empty() {
             self.pools.hosting = None;
-            return self.note("pool: nobody here gives their machine to pools yet; they can say /pool give on here".into());
+            let why = unlinked.unwrap_or_else(|| "nobody here gives their machine to pools yet; they can say /pool give on here".into());
+            return self.note(format!("pool: {why}"));
         }
         h.phase = Phase::Gathering;
         let names: Vec<String> = h.members.iter().map(|m| format!("{} ({})", m.nick, ram(m.mem))).collect();
-        let text = format!("pool: asking {} to pool {} with you…", names.join(", "), h.model);
+        let mut text = format!("pool: asking {} to pool {} with you…", names.join(", "), h.model);
+        if let Some(unlinked) = unlinked {
+            text.push_str(&format!(" ({unlinked})"));
+        }
         let me = self.me.clone();
         thread::spawn(move || {
             thread::sleep(GATHER);

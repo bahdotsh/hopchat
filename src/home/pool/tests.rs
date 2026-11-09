@@ -427,6 +427,23 @@ fn whoever_hasnt_answered_when_time_is_up_is_let_go() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn givers_without_a_direct_link_are_named_not_called_absent() {
+    let root = scratch("pool-unlinked");
+    let hank = hosting_with(&root, vec![giver("gina", None)]);
+    assert!(hank.home.pools.hosting.is_none());
+    assert!(sent(&hank).is_empty());
+    let said = notes(&hank);
+    assert!(said.iter().any(|n| n.contains("gina gives but isn't directly connected")), "{said:?}");
+    assert!(!said.iter().any(|n| n.contains("nobody here gives")), "{said:?}");
+
+    // With someone reachable too, the pool goes ahead and says who can't come.
+    let hank = hosting_with(&root, vec![giver("gina", None), giver("ivy", peer("ivy").ip)]);
+    assert!(matches!(sent(&hank).as_slice(), [(to, Wire::Join { .. })] if to == "ivy"));
+    assert!(notes(&hank).iter().any(|n| n.contains("asking ivy (8 GB RAM)") && n.contains("gina gives")));
+    let _ = fs::remove_dir_all(root);
+}
+
 /// `gina` giving in `g` and helping `hank`'s pool `p1`, with an RPC server
 /// that never listens, so the pool stays as it was arranged.
 fn helping(root: &Path) -> Side {
