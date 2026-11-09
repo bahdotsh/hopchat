@@ -1143,6 +1143,7 @@ dependencies = [
  "chrono",
  "crc32fast",
  "getrandom 0.4.3",
+ "hkdf",
  "hmac",
  "mdns-sd",
  "native-tls",

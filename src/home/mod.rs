@@ -25,11 +25,13 @@ pub mod ha;
 mod ipp;
 mod light;
 mod ollama;
+pub mod pool;
 mod printer;
 mod switch;
 mod tv;
 pub mod webos;
 mod tuya;
+mod tunnel;
 mod watch;
 pub mod wiz;
 
@@ -175,6 +177,13 @@ pub struct Config {
     /// Whether group members may borrow this machine's model.
     #[serde(default = "yes")]
     pub share: bool,
+    /// The groups (and maybe the lobby) whose pools may use this machine's
+    /// memory (`/pool give on` typed there).
+    #[serde(default)]
+    pub pool_groups: Vec<String>,
+    /// Where llama.cpp's binaries are, when they aren't on the PATH.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llama_dir: Option<PathBuf>,
     /// Whether a title asked for on the TV may be looked up off the network.
     #[serde(default)]
     pub lookups: bool,
@@ -257,6 +266,8 @@ impl Default for Config {
             model: default_model(),
             ollama: default_ollama(),
             share: true,
+            pool_groups: Vec::new(),
+            llama_dir: None,
             lookups: false,
             country: None,
             ha: None,
@@ -400,6 +411,24 @@ pub enum Request {
     /// A group member wants this machine's model to think.
     Lend { to: String, who: String, id: String, messages: Vec<serde_json::Value>, tools: serde_json::Value },
     Answered { question: ai::Question, asked: serde_json::Value, answer: Result<String, String> },
+    /// A hidden pool message from a peer.
+    PoolWire { peer: pool::Peer, wire: pool::Wire },
+    /// The engine lost a peer a pool may have needed.
+    PoolPeerGone { address: String, who: String },
+    /// Peers who give to pools, by nickname, and how much memory.
+    PoolGivers(Vec<(String, u64)>),
+    /// Who gives in pool `id`'s group, as the engine saw them.
+    PoolFound { id: String, givers: Vec<pool::Giver> },
+    /// The time for givers to answer pool `id` is up.
+    PoolGathered { id: String },
+    /// Every giver's tunnel for pool `id` answered, or why one didn't.
+    PoolReached { id: String, result: Result<(), String> },
+    /// This machine's RPC server and tunnel for pool `id` are up, or why not.
+    PoolServing { id: String, result: Result<tunnel::Listener, String> },
+    /// The host's llama-server loaded pool `id`'s model, or why not.
+    PoolLoaded { id: String, result: Result<(), String> },
+    /// A llama.cpp server this machine runs for pool `id` stopped, and why.
+    PoolEnded { id: String, why: String },
 }
 
 /// A device name as it may be kept: one line, not too long.
@@ -452,6 +481,8 @@ pub struct Home {
     connecting_ha: Option<u64>,
     /// How many `/home ha` connections were started, to tell them apart.
     ha_attempts: u64,
+    /// The pool this machine hosts or helps, if any.
+    pools: pool::Pools,
 }
 
 impl Home {
@@ -479,6 +510,7 @@ impl Home {
             lent_to: None,
             connecting_ha: None,
             ha_attempts: 0,
+            pools: pool::Pools::default(),
         };
         if unstamped {
             home.save();
@@ -565,6 +597,7 @@ impl Home {
 
     pub fn run(mut self, requests: Receiver<Request>) {
         self.publish();
+        self.pool_offer();
         self.scan();
         let me = self.me.clone();
         thread::spawn(move || {
@@ -655,6 +688,15 @@ impl Home {
             Request::CheckModel => self.check_model(),
             Request::Lenders(lenders) => self.lenders = lenders,
             Request::Lend { to, who, id, messages, tools } => self.lend(to, who, id, messages, tools),
+            Request::PoolWire { peer, wire } => self.pool_wire(peer, wire),
+            Request::PoolPeerGone { address, who } => self.pool_peer_gone(&address, who),
+            Request::PoolGivers(givers) => self.pools.givers = givers,
+            Request::PoolFound { id, givers } => self.pool_found(id, givers),
+            Request::PoolGathered { id } => self.pool_gathered(id),
+            Request::PoolReached { id, result } => self.pool_reached(id, result),
+            Request::PoolServing { id, result } => self.pool_serving(id, result),
+            Request::PoolLoaded { id, result } => self.pool_loaded(id, result),
+            Request::PoolEnded { id, why } => self.pool_ended(id, why),
         }
     }
 
@@ -973,6 +1015,8 @@ impl Home {
         let value = words.next();
         match (verb, value) {
             ("ai", verb) => self.ai_configure(group, verb.unwrap_or("status"), words.next()),
+            // A model or a folder may have spaces in it, so take the rest whole.
+            ("pool", verb) => self.pool_configure(group, verb.unwrap_or("status"), pool::after_words(args, 2)),
             ("on", _) => {
                 let Some(group) = group else {
                     return "open a group first: /home on lets that group use your devices".into();
@@ -1064,6 +1108,7 @@ impl Home {
         lend::Mind {
             local,
             local_ready: self.model_state == ModelState::Ready,
+            pool: self.pools.url().map(|(url, _)| url),
             engine: self.engine.clone(),
             group: group.to_string(),
         }
@@ -1071,8 +1116,15 @@ impl Home {
 
     /// Tells the engine what this machine lends, when that changed.
     fn offer(&mut self) {
-        let offer = (self.config.share && self.model_state == ModelState::Ready)
-            .then(|| self.config.model.clone());
+        // A pool writes every plain answer a borrower gets, so it is what
+        // this machine says it lends while it runs.
+        let offer = if !self.config.share {
+            None
+        } else if let Some((_, model)) = self.pools.url() {
+            Some(format!("{model}, pooled"))
+        } else {
+            (self.model_state == ModelState::Ready).then(|| self.config.model.clone())
+        };
         if offer != self.offered {
             self.offered = offer.clone();
             let _ = self.engine.send(Input::Ui(Command::Offer(offer)));
@@ -1086,7 +1138,14 @@ impl Home {
         if !self.config.share {
             return refuse("isn't sharing its model");
         }
-        if self.model_state != ModelState::Ready {
+        let tools = tools.as_array().filter(|t| !t.is_empty()).map(|_| tools.clone());
+        let pool = self.pools.answerer(tools.as_ref());
+        if pool.is_none() && self.model_state != ModelState::Ready {
+            // The pooled model is offered for plain answers; a turn that
+            // calls tools needs Ollama, so the borrower should try elsewhere.
+            if self.pools.url().is_some() {
+                return refuse("its pooled model only writes plain answers, and its own model isn't ready");
+            }
             return refuse("its model isn't ready");
         }
         if self.lending.load(Ordering::SeqCst) >= MAX_LENDING {
@@ -1094,18 +1153,21 @@ impl Home {
         }
         let fresh = !matches!(&self.lent_to, Some((w, at)) if *w == who && at.elapsed() < Duration::from_secs(60));
         if fresh {
-            self.note(format!("{who} is using your {}", self.config.model));
+            let model = pool.as_ref().map_or(self.config.model.clone(), |(_, m)| format!("pooled {m}"));
+            self.note(format!("{who} is using your {model}"));
         }
         self.lent_to = Some((who, Instant::now()));
         // A plain answer is written out in full, so it gets longer.
-        let tools = tools.as_array().filter(|t| !t.is_empty()).map(|_| tools.clone());
         let (url, model) = (self.config.ollama.clone(), self.config.model.clone());
         let local = if tools.is_some() { ollama::Ollama::new(url, model) } else { ollama::Ollama::patient(url, model) };
         let engine = self.engine.clone();
         let lending = self.lending.clone();
         lending.fetch_add(1, Ordering::SeqCst);
         thread::spawn(move || {
-            let result = local.raw(&messages, tools.as_ref());
+            let result = match pool {
+                Some((url, _)) => pool::ask(&url, &messages),
+                None => local.raw(&messages, tools.as_ref()),
+            };
             lending.fetch_sub(1, Ordering::SeqCst);
             let _ = engine.send(Input::Ui(Command::Lend { to, id, result }));
         });
@@ -1394,6 +1456,7 @@ mod tests {
         let mind = lend::Mind {
             local: Ollama::new("http://127.0.0.1:9".into(), "m".into()),
             local_ready: false,
+            pool: None,
             engine,
             group: "g".into(),
         };
@@ -1415,6 +1478,7 @@ mod tests {
         let mind = lend::Mind {
             local: Ollama::new("http://127.0.0.1:9".into(), "m".into()),
             local_ready: false,
+            pool: None,
             engine,
             group: "g".into(),
         };

@@ -49,7 +49,11 @@ impl Home {
     /// model whose owner switched `@ai` on there and is answering already.
     fn ai_answers(&self, q: &Question) -> bool {
         self.ai_enabled(&q.group)
-            || (q.mine && (q.group == LOBBY || q.group == ME || self.model_state == ModelState::Ready))
+            || (q.mine
+                && (q.group == LOBBY
+                    || q.group == ME
+                    || self.model_state == ModelState::Ready
+                    || self.pools.url().is_some()))
     }
 
     pub(super) fn ai_ask(&mut self, q: Question) {
