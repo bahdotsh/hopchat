@@ -462,6 +462,25 @@ fn helping(root: &Path) -> Side {
 }
 
 #[test]
+fn the_same_invitation_twice_leaves_the_worker_running() {
+    let root = scratch("pool-again");
+    let mut gina = helping(&root);
+    let rpc = gina.home.pools.serving.as_ref().unwrap().rpc.clone();
+    gina.home.handle(Request::PoolWire { peer: peer("hank"), wire: join("g") });
+    let s = gina.home.pools.serving.as_ref().unwrap();
+    assert!(Arc::ptr_eq(&s.rpc, &rpc), "the worker in use was replaced");
+    assert!(rpc.exited().is_none());
+    assert!(sent(&gina).is_empty());
+
+    // A new pool from the same host does replace it.
+    let key = base64::engine::general_purpose::STANDARD.encode(tunnel::secret());
+    let again = Wire::Join { id: "p2".into(), group: "g".into(), model: "m".into(), key };
+    gina.home.handle(Request::PoolWire { peer: peer("hank"), wire: again });
+    assert!(gina.home.pools.serving.as_ref().is_some_and(|s| s.id == "p2" && !Arc::ptr_eq(&s.rpc, &rpc)));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn giving_off_where_a_pool_runs_leaves_it() {
     let root = scratch("pool-off");
     let mut gina = helping(&root);

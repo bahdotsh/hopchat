@@ -544,10 +544,15 @@ impl Home {
         else {
             return refuse("got a garbled pool key");
         };
-        if let Some(s) = &self.pools.serving
-            && s.host != host.address
-        {
-            return refuse(&format!("is already in {}'s pool", s.host_nick));
+        if let Some(s) = &self.pools.serving {
+            if s.host != host.address {
+                return refuse(&format!("is already in {}'s pool", s.host_nick));
+            }
+            // The same invitation again: the worker it started is still in
+            // use, so it stays as it is.
+            if s.id == id {
+                return;
+            }
         }
         // A host starting again replaces its old pool here.
         self.pools.serving = None;
