@@ -99,10 +99,15 @@ pub fn serve(key: Secret, allow: IpAddr, target: SocketAddr) -> io::Result<Liste
         if stream.peer_addr().ok().map(|a| a.ip()) != Some(allow) {
             return Ok(());
         }
-        let (send, mut recv) = accept_handshake(&stream, &key)?;
+        let (mut send, mut recv) = accept_handshake(&stream, &key)?;
         // The first frame proves the key before anything reaches the target.
         let mut reader = stream.try_clone()?;
         let first = read_frame(&mut reader, &mut recv)?;
+        // An empty one is a probe: prove the key back, and reach nothing.
+        // Real traffic never sends one (see `pipe`).
+        if first.is_empty() {
+            return write_frame(&mut reader, &mut send, &[]);
+        }
         // After it, RPC may sit idle as long as it likes.
         stream.set_read_timeout(None)?;
         let mut local = TcpStream::connect_timeout(&target, CONNECT_WAIT)?;
@@ -127,20 +132,41 @@ pub fn forward(key: Secret, remote: SocketAddr) -> io::Result<Listener> {
     })
 }
 
-/// Proves the worker's tunnel at `remote` is reachable from here and lets
-/// this machine in, without anything reaching its RPC server: the worker
-/// only opens that once a sealed frame arrives, and this sends none.
+/// Proves the worker's tunnel at `remote` is reachable from here, lets this
+/// machine in, and holds the same key, without anything reaching its RPC
+/// server: an empty sealed frame goes each way, and the worker opens the
+/// RPC server only for a frame with something in it.
 pub fn probe(key: Secret, remote: SocketAddr) -> io::Result<()> {
     let stream = TcpStream::connect_timeout(&remote, CONNECT_WAIT)?;
-    let result = offer_handshake(&stream, &key).map(|_| ()).map_err(|e| match e.kind() {
+    let result = probe_on(&stream, &key);
+    let _ = stream.shutdown(Shutdown::Both);
+    result
+}
+
+fn probe_on(stream: &TcpStream, key: &Secret) -> io::Result<()> {
+    let quiet = |e: io::Error| match e.kind() {
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => io::Error::other("it didn't answer"),
+        _ => e,
+    };
+    let (mut send, mut recv) = offer_handshake(stream, key).map_err(|e| match e.kind() {
         io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionReset => {
             io::Error::other("it turned this machine away")
         }
-        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => io::Error::other("it didn't answer"),
-        _ => e,
-    });
-    let _ = stream.shutdown(Shutdown::Both);
-    result
+        _ => quiet(e),
+    })?;
+    let mut s = stream.try_clone()?;
+    s.set_read_timeout(Some(HANDSHAKE_WAIT))?;
+    // Past the handshake, only a key that differs closes it.
+    let keyed = |e: io::Error| match e.kind() {
+        io::ErrorKind::UnexpectedEof
+        | io::ErrorKind::ConnectionReset
+        | io::ErrorKind::BrokenPipe
+        | io::ErrorKind::InvalidData => io::Error::other("its pool key doesn't match the one sent to it"),
+        _ => quiet(e),
+    };
+    write_frame(&mut s, &mut send, &[]).map_err(keyed)?;
+    read_frame(&mut s, &mut recv).map_err(keyed)?;
+    Ok(())
 }
 
 fn listen(
@@ -453,6 +479,13 @@ mod tests {
         let worker = serve(key, IpAddr::V4(Ipv4Addr::new(10, 255, 255, 1)), echo()).unwrap();
         let error = probe(key, SocketAddr::from((Ipv4Addr::LOCALHOST, worker.port))).unwrap_err();
         assert!(error.to_string().contains("turned this machine away"), "{error}");
+    }
+
+    #[test]
+    fn a_probe_with_another_key_is_told_so() {
+        let (_worker, at) = worker(secret());
+        let error = probe(secret(), at).unwrap_err();
+        assert!(error.to_string().contains("key doesn't match"), "{error}");
     }
 
     #[test]
