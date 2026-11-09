@@ -326,10 +326,10 @@ Only one person in a group needs to run a model.
 alice> /pool give on
 bob>   /pool start qwen2.5:72b
 🤖 is loading qwen2.5:72b across this machine and alice (16 GB), carol (32 GB). This can take a few minutes.
-🤖 qwen2.5:72b is ready, pooled across the host, alice, carol (64 GB of memory between them). Mention @ai to ask it.
+🤖 qwen2.5:72b is ready, pooled across this machine and alice (16 GB), carol (32 GB). Mention @ai to ask it.
 ```
 
-A model too big for any one laptop can run across several. The model's layers are split across every machine in the pool, in proportion to each one's memory, using llama.cpp's [RPC backend](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc).
+A model too big for any one laptop can run across several. The model's layers are split across the host's GPU, when it has one, and every giver, in proportion to the free memory llama.cpp sees on each, using llama.cpp's [RPC backend](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc). On a host without a GPU, the givers hold nearly all of the model.
 
 - **Giving.** `/pool give on`, typed in a group, lets pools started in that group use this machine's memory. It is off until you turn it on, and on only where you typed it. Typed in the lobby, it lets anyone on your network use your machine, so think before doing that. You see a note when someone's pool starts using your machine. `/pool give off` in a group takes it back there, and anywhere else it takes it back everywhere.
 - **Hosting.** `/pool start MODEL` in a group or the lobby asks every giver there to join, waits up to 20 seconds for answers, checks it can reach each one, and then loads the model. `MODEL` is a model Ollama has pulled, such as `qwen2.5:72b`, or a path to a `.gguf` file, spaces and all. Without it, the pool uses your `/home model`. Only the host needs the model on disk: the first load sends each giver its share of the weights, and givers keep it for next time in `pool-cache` in their data directory. `/pool` shows how much is kept, and `/pool clear` deletes it. A machine either hosts a pool or helps one, never both at once.

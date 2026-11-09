@@ -732,14 +732,14 @@ impl Home {
         match result {
             Ok(()) => {
                 h.phase = Phase::Ready;
-                let mut who = vec!["the host".to_string()];
-                who.extend(h.members.iter().map(|m| m.nick.clone()));
-                let total: u64 = memory() + h.members.iter().filter_map(|m| m.ready.map(|r| r.1)).sum::<u64>();
+                // Only the host's GPU holds layers, not its main memory, so
+                // its share isn't counted as a number it may not have given.
+                let names: Vec<String> =
+                    h.members.iter().map(|m| format!("{} ({})", m.nick, size(m.ready.map_or(0, |r| r.1)))).collect();
                 let text = format!(
-                    "{} is ready, pooled across {} ({} of memory between them). Mention {AI} to ask it.",
+                    "{} is ready, pooled across this machine and {}. Mention {AI} to ask it.",
                     h.model,
-                    who.join(", "),
-                    size(total)
+                    names.join(", ")
                 );
                 let group = h.group.clone();
                 self.say_as(&group, AI_SIGNATURE, text);
