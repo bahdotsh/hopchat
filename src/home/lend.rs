@@ -86,10 +86,8 @@ pub struct Thought {
 
 impl Mind {
     pub fn think(&self, messages: &[Value], tools: Option<&Value>) -> Result<Thought, String> {
-        // The pool writes plain answers; a turn that drives devices stays
-        // with a model that has been asked to call tools before.
         let mut pool_error = None;
-        if let Some(url) = self.pool.as_ref().filter(|_| tools.is_none()) {
+        if let Some(url) = self.pool.as_ref().filter(|_| super::pool::takes(tools)) {
             match super::pool::ask(url, messages) {
                 Ok(message) => return Ok(Thought { message, by: None }),
                 Err(e) => pool_error = Some(e),

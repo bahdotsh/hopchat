@@ -331,15 +331,15 @@ bob>   /pool start qwen2.5:72b
 
 A model too big for any one laptop can run across several. The model's layers are split across every machine in the pool, in proportion to each one's memory, using llama.cpp's [RPC backend](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc).
 
-- **Giving.** `/pool give on` lets pools started in your groups (the lobby counts) use this machine's memory. It is off until you turn it on. You see a note when someone's pool starts using your machine, and `/pool give off` takes it back at once.
-- **Hosting.** `/pool start MODEL` in a group or the lobby asks every giver there to join, waits up to 20 seconds for answers, and then loads the model. `MODEL` is a model Ollama has pulled, such as `qwen2.5:72b`, or a path to a `.gguf` file. Without it, the pool uses your `/home model`. Only the host needs the model on disk: the first load sends each giver its share of the weights, and givers cache it for next time.
-- **Asking.** While the pool runs, the host's `@ai` answers come from the pooled model, and anyone who borrows the host's model gets the pooled one too. `@home` keeps using Ollama, because driving devices needs a model that calls tools.
-- **Stopping.** `/pool stop` ends a pool you host, or leaves one you are helping. A pool also ends when any of its machines leaves the network.
+- **Giving.** `/pool give on`, typed in a group, lets pools started in that group use this machine's memory. It is off until you turn it on, and on only where you typed it. Typed in the lobby, it lets anyone on your network use your machine, so think before doing that. You see a note when someone's pool starts using your machine. `/pool give off` in a group takes it back there, and anywhere else it takes it back everywhere.
+- **Hosting.** `/pool start MODEL` in a group or the lobby asks every giver there to join, waits up to 20 seconds for answers, checks it can reach each one, and then loads the model. `MODEL` is a model Ollama has pulled, such as `qwen2.5:72b`, or a path to a `.gguf` file, spaces and all. Without it, the pool uses your `/home model`. Only the host needs the model on disk: the first load sends each giver its share of the weights, and givers keep it for next time in `pool-cache` in their data directory. `/pool` shows how much is kept, and `/pool clear` deletes it. A machine either hosts a pool or helps one, never both at once.
+- **Asking.** While the pool runs, the host's `@ai` answers come from the pooled model, and anyone who borrows the host's model gets the pooled one too, under its pooled name. `@home` keeps using Ollama, because driving devices needs a model that calls tools.
+- **Stopping.** `/pool stop` ends a pool you host, or leaves one you are helping. A pool also ends when any of its machines leaves the network. llama.cpp's servers stop with hopchat however it ends, a crash included.
 - **Speed.** Every generated token makes a round trip to each giver, so the network matters more than the CPUs. Ethernet or Thunderbolt is much faster than busy Wi-Fi.
 
-**What you need.** The host needs llama.cpp's `llama-server` and each giver needs `ggml-rpc-server` (called `rpc-server` in older builds), both built with `GGML_RPC=ON`. The [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases) are built that way. Put them on your `PATH`, or point hopchat at their folder with `/pool bin FOLDER`. Their output goes to `pool.log` in your data directory.
+**What you need.** The host needs llama.cpp's `llama-server` and each giver needs `ggml-rpc-server` (called `rpc-server` in older builds), both built with `GGML_RPC=ON`. The [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases) are built that way. Put them on your `PATH`, or point hopchat at their folder with `/pool bin FOLDER`. Their output goes to `pool.log` in your data directory, which starts over once it passes 16 MB.
 
-**How the traffic is protected.** llama.cpp's RPC protocol has no authentication or encryption, so hopchat never puts it on the network as it is. Each giver's RPC server listens only on `127.0.0.1`. The host's llama-server talks to a local tunnel, which carries the traffic to the giver sealed with ChaCha20-Poly1305. The tunnel key is made fresh for each giver and each pool, and sent inside the end-to-end encrypted session. Each TCP connection derives its own keys from it, and the giver's tunnel accepts connections only from the host's address. Even so, the host of a pool can run any computation llama.cpp's RPC server allows on your machine, and llama.cpp calls that server a proof of concept. Give only to groups you trust.
+**How the traffic is protected.** llama.cpp's RPC protocol has no authentication or encryption, so hopchat never puts it on the network as it is. Each giver's RPC server listens only on `127.0.0.1`. The host's llama-server talks to a local tunnel, which carries the traffic to the giver sealed with ChaCha20-Poly1305. The tunnel key is made fresh for each giver and each pool, and sent inside the end-to-end encrypted session. Each TCP connection derives its own keys from it, and the giver's tunnel accepts connections only from the host's address. Even so, the host of a pool can run any computation llama.cpp's RPC server allows on your machine, and llama.cpp calls that server a proof of concept. Give only in groups where you trust everyone.
 
 ### Headless mode
 
@@ -408,9 +408,10 @@ Without `--to`, `--say` and `--file` go to the first peer whose secure session c
 | `/ai forget` | clear this conversation's model memory |
 | `/ai share on\|off` | lend your model to people you share a group with, or stop |
 | `/pool start [MODEL]` | run one model across the givers in this group (an Ollama model name or a `.gguf` path) |
-| `/pool give on\|off` | let pools in your groups use this machine's memory, or stop |
+| `/pool give on\|off` | let pools started in this group use this machine's memory, or stop |
 | `/pool stop` | end the pool you host, or leave the one you're helping |
 | `/pool bin FOLDER` | where to find llama.cpp's `llama-server` and `ggml-rpc-server` |
+| `/pool clear` | delete the model weights pools left on this machine |
 | `/pool` | show what is pooling and who gives |
 | `/clear` | delete this conversation from this device |
 | `/log` | show or hide the protocol event log |
@@ -449,8 +450,9 @@ hopchat [--name NICK] [--dir PATH] [--downloads PATH] [--theme dark|light]
 | --- | --- |
 | `store.key` | the key that seals everything else |
 | `history/` | each conversation, and your todos and reminders (`tasks.box`), sealed with XChaCha20-Poly1305 |
-| `home.json` | devices, the model, where home and `@ai` are on, whether you give to pools, and each TV's client key and pinned certificate |
+| `home.json` | devices, the model, where home and `@ai` are on, the groups you give to pools in, and each TV's client key and pinned certificate |
 | `pool.log` | llama.cpp's output while this machine hosts or helps a pool |
+| `pool-cache/` | model weights pool hosts sent this machine, kept for next time |
 | everything else | the SDK's identity and protocol stores |
 
 If there's no `~/Downloads` folder, received files go to `<dir>/downloads`.
@@ -469,7 +471,7 @@ The SDK does no I/O itself, so hopchat supplies the platform bridge for its peer
 | Me | `src/me.rs` | A local-only conversation. Messages go straight back to the UI and to home, never onto the wire. |
 | History | `src/history.rs` | Encrypted per-conversation history. |
 | Tasks | `src/tasks.rs` | Todos and reminders: reading times from plain English, repeats, and what is due. They fire from the UI loop into Me. |
-| Home | `src/home/` | Device discovery and drivers (`wiz.rs`, `tuya.rs`, `webos.rs`, `androidtv.rs`, `ipp.rs`), the Ollama client, the `@home` tool-calling loop (`assistant.rs`), `@ai` (`ai.rs`), model lending (`lend.rs`), and pools (`pool.rs`, with the encrypted RPC tunnel in `tunnel.rs`). |
+| Home | `src/home/` | Device discovery and drivers (`wiz.rs`, `tuya.rs`, `webos.rs`, `androidtv.rs`, `ipp.rs`), the Ollama client, the `@home` tool-calling loop (`assistant.rs`), `@ai` (`ai.rs`), model lending (`lend.rs`), and pools (`pool/`, with the encrypted RPC tunnel in `tunnel.rs`). |
 | UI | `src/ui/` | ratatui rendering, the composer, the file browser, and the group and device panels. |
 
 ## Security
@@ -480,7 +482,7 @@ The SDK does no I/O itself, so hopchat supplies the platform bridge for its peer
 - Received file names are sanitised: files never overwrite existing ones or escape the downloads folder.
 - LG and Android TVs use self-signed certificates. hopchat pins the certificate it sees when pairing and refuses a different one later. For an Android TV, hopchat also makes its own certificate, which the TV remembers in place of a password. It is kept in `home.json` with the rest.
 - Model requests sent to a lender travel inside the encrypted one-to-one session, and lenders only answer people they share a group with.
-- Pool traffic between machines is sealed with ChaCha20-Poly1305 under a key sent inside the encrypted session. llama.cpp's own RPC servers only listen on loopback. Giving to pools is off by default; see [`/pool`](#one-model-across-the-room-with-pool) for what a pool host can do on a giver's machine.
+- Pool traffic between machines is sealed with ChaCha20-Poly1305 under a key sent inside the encrypted session. llama.cpp's own RPC servers only listen on loopback. Giving to pools is off by default and switched on one group at a time; see [`/pool`](#one-model-across-the-room-with-pool) for what a pool host can do on a giver's machine.
 - Nothing is sent to the internet, apart from whatever your own Ollama setup does.
 
 If you find a security issue, please report it privately to the maintainer instead of opening a public issue.

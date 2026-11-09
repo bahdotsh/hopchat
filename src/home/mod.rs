@@ -177,9 +177,10 @@ pub struct Config {
     /// Whether group members may borrow this machine's model.
     #[serde(default = "yes")]
     pub share: bool,
-    /// Whether this machine lends its memory to pools (`/pool give`).
+    /// The groups (and maybe the lobby) whose pools may use this machine's
+    /// memory (`/pool give on` typed there).
     #[serde(default)]
-    pub pool_give: bool,
+    pub pool_groups: Vec<String>,
     /// Where llama.cpp's binaries are, when they aren't on the PATH.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llama_dir: Option<PathBuf>,
@@ -265,7 +266,7 @@ impl Default for Config {
             model: default_model(),
             ollama: default_ollama(),
             share: true,
-            pool_give: false,
+            pool_groups: Vec::new(),
             llama_dir: None,
             lookups: false,
             country: None,
@@ -410,14 +411,18 @@ pub enum Request {
     /// A group member wants this machine's model to think.
     Lend { to: String, who: String, id: String, messages: Vec<serde_json::Value>, tools: serde_json::Value },
     Answered { question: ai::Question, asked: serde_json::Value, answer: Result<String, String> },
-    /// A hidden pool message from a peer, with where it connects from.
-    PoolWire { from: String, who: String, ip: Option<std::net::IpAddr>, wire: pool::Wire },
+    /// A hidden pool message from a peer.
+    PoolWire { peer: pool::Peer, wire: pool::Wire },
     /// The engine lost a peer a pool may have needed.
     PoolPeerGone { address: String, who: String },
-    /// Peers who give to pools, as "alice (16 GB)".
-    PoolGivers(Vec<String>),
+    /// Peers who give to pools, by nickname, and how much memory.
+    PoolGivers(Vec<(String, u64)>),
+    /// Who gives in pool `id`'s group, as the engine saw them.
+    PoolFound { id: String, givers: Vec<pool::Giver> },
     /// The time for givers to answer pool `id` is up.
     PoolGathered { id: String },
+    /// Every giver's tunnel for pool `id` answered, or why one didn't.
+    PoolReached { id: String, result: Result<(), String> },
     /// This machine's RPC server and tunnel for pool `id` are up, or why not.
     PoolServing { id: String, result: Result<tunnel::Listener, String> },
     /// The host's llama-server loaded pool `id`'s model, or why not.
@@ -681,10 +686,12 @@ impl Home {
             Request::CheckModel => self.check_model(),
             Request::Lenders(lenders) => self.lenders = lenders,
             Request::Lend { to, who, id, messages, tools } => self.lend(to, who, id, messages, tools),
-            Request::PoolWire { from, who, ip, wire } => self.pool_wire(from, who, ip, wire),
+            Request::PoolWire { peer, wire } => self.pool_wire(peer, wire),
             Request::PoolPeerGone { address, who } => self.pool_peer_gone(&address, who),
             Request::PoolGivers(givers) => self.pools.givers = givers,
+            Request::PoolFound { id, givers } => self.pool_found(id, givers),
             Request::PoolGathered { id } => self.pool_gathered(id),
+            Request::PoolReached { id, result } => self.pool_reached(id, result),
             Request::PoolServing { id, result } => self.pool_serving(id, result),
             Request::PoolLoaded { id, result } => self.pool_loaded(id, result),
         }
@@ -1005,7 +1012,8 @@ impl Home {
         let value = words.next();
         match (verb, value) {
             ("ai", verb) => self.ai_configure(group, verb.unwrap_or("status"), words.next()),
-            ("pool", verb) => self.pool_configure(group, verb.unwrap_or("status"), words.next()),
+            // A model or a folder may have spaces in it, so take the rest whole.
+            ("pool", verb) => self.pool_configure(group, verb.unwrap_or("status"), pool::after_words(args, 2)),
             ("on", _) => {
                 let Some(group) = group else {
                     return "open a group first: /home on lets that group use your devices".into();
@@ -1105,13 +1113,14 @@ impl Home {
 
     /// Tells the engine what this machine lends, when that changed.
     fn offer(&mut self) {
-        let pooled = self.pools.url().map(|(_, model)| format!("{model}, pooled"));
+        // A pool writes every plain answer a borrower gets, so it is what
+        // this machine says it lends while it runs.
         let offer = if !self.config.share {
             None
-        } else if self.model_state == ModelState::Ready {
-            Some(self.config.model.clone())
+        } else if let Some((_, model)) = self.pools.url() {
+            Some(format!("{model}, pooled"))
         } else {
-            pooled
+            (self.model_state == ModelState::Ready).then(|| self.config.model.clone())
         };
         if offer != self.offered {
             self.offered = offer.clone();
@@ -1127,8 +1136,7 @@ impl Home {
             return refuse("isn't sharing its model");
         }
         let tools = tools.as_array().filter(|t| !t.is_empty()).map(|_| tools.clone());
-        // A pool here writes plain answers; driving devices stays with Ollama.
-        let pool = self.pools.url().filter(|_| tools.is_none());
+        let pool = self.pools.answerer(tools.as_ref());
         if pool.is_none() && self.model_state != ModelState::Ready {
             return refuse("its model isn't ready");
         }

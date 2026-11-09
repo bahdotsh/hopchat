@@ -739,11 +739,8 @@ impl Engine {
 
     fn tell_home_givers(&self) {
         if let Some(home) = &self.home {
-            let mut givers: Vec<String> = self
-                .givers
-                .iter()
-                .map(|(address, mem)| format!("{} ({})", self.nick_or_address(address), home::pool::size(*mem)))
-                .collect();
+            let mut givers: Vec<(String, u64)> =
+                self.givers.iter().map(|(address, mem)| (self.nick_or_address(address), *mem)).collect();
             givers.sort();
             let _ = home.send(home::Request::PoolGivers(givers));
         }
@@ -762,20 +759,19 @@ impl Engine {
                     self.tell_home_givers();
                 }
             }
-            Wire::Join { ref id, ref group, .. } if !self.shares(group, &from) => {
-                let refuse = Wire::Refuse { id: id.clone(), error: "isn't in that group with you".into() };
-                self.send_pool(&from, &refuse);
-            }
-            wire => match &self.home {
-                Some(home) => {
-                    let (who, ip) = (self.nick_or_address(&from), self.ip_of(&from));
-                    let _ = home.send(home::Request::PoolWire { from, who, ip, wire });
-                }
-                None => {
-                    if let Wire::Join { id, .. } = wire {
-                        self.send_pool(&from, &Wire::Refuse { id, error: "isn't running home".into() });
+            wire => match home::pool::admit(wire, |group| self.shares(group, &from)) {
+                Err(refuse) => self.send_pool(&from, &refuse),
+                Ok(wire) => match &self.home {
+                    Some(home) => {
+                        let peer = home::pool::Peer { who: self.nick_or_address(&from), ip: self.ip_of(&from), address: from };
+                        let _ = home.send(home::Request::PoolWire { peer, wire });
                     }
-                }
+                    None => {
+                        if let Wire::Join { id, .. } = wire {
+                            self.send_pool(&from, &Wire::Refuse { id, error: "isn't running home".into() });
+                        }
+                    }
+                },
             },
         }
     }

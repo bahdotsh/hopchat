@@ -40,6 +40,9 @@ const HANDSHAKE_WAIT: Duration = Duration::from_secs(10);
 const CONNECT_WAIT: Duration = Duration::from_secs(5);
 /// How often a listener looks up from accepting to see if it was closed.
 const ACCEPT_POLL: Duration = Duration::from_millis(100);
+/// Streams a listener holds open at once. llama.cpp keeps one connection per
+/// worker, so this only bounds someone holding half-open handshakes.
+const MAX_OPEN: usize = 64;
 
 /// A fresh random key.
 pub fn secret() -> Secret {
@@ -51,23 +54,48 @@ pub fn secret() -> Secret {
 /// A listener and the connections it carries. Dropping it closes them all.
 pub struct Listener {
     pub port: u16,
-    closed: Arc<AtomicBool>,
-    open: Arc<Mutex<Vec<TcpStream>>>,
+    conns: Arc<Conns>,
 }
 
 impl Drop for Listener {
     fn drop(&mut self) {
+        self.conns.close();
+    }
+}
+
+/// The streams a listener carries, and whether it was closed.
+#[derive(Default)]
+struct Conns {
+    closed: AtomicBool,
+    open: Mutex<Vec<TcpStream>>,
+}
+
+impl Conns {
+    fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
         for stream in self.open.lock().unwrap().drain(..) {
             let _ = stream.shutdown(Shutdown::Both);
         }
+    }
+
+    /// Holds a copy of `stream` so closing the listener closes it too.
+    /// Checked under the same lock `close` drains with, so a stream kept
+    /// while the listener closes is shut rather than missed.
+    fn keep(&self, stream: &TcpStream) -> io::Result<()> {
+        let mut open = self.open.lock().unwrap();
+        if self.closed.load(Ordering::SeqCst) {
+            let _ = stream.shutdown(Shutdown::Both);
+            return Err(io::Error::other("pool tunnel closed"));
+        }
+        open.push(stream.try_clone()?);
+        Ok(())
     }
 }
 
 /// The worker's end: accepts sealed connections from `allow` only, on any
 /// interface, and opens each onto `target` once it has proved the key.
 pub fn serve(key: Secret, allow: IpAddr, target: SocketAddr) -> io::Result<Listener> {
-    listen(Ipv4Addr::UNSPECIFIED, move |stream, open| {
+    listen(Ipv4Addr::UNSPECIFIED, move |stream, conns| {
         if stream.peer_addr().ok().map(|a| a.ip()) != Some(allow) {
             return Ok(());
         }
@@ -75,10 +103,12 @@ pub fn serve(key: Secret, allow: IpAddr, target: SocketAddr) -> io::Result<Liste
         // The first frame proves the key before anything reaches the target.
         let mut reader = stream.try_clone()?;
         let first = read_frame(&mut reader, &mut recv)?;
+        // After it, RPC may sit idle as long as it likes.
+        stream.set_read_timeout(None)?;
         let mut local = TcpStream::connect_timeout(&target, CONNECT_WAIT)?;
         let _ = local.set_nodelay(true);
+        conns.keep(&local)?;
         local.write_all(&first)?;
-        open.lock().unwrap().push(local.try_clone()?);
         pipe(stream, local, send, recv);
         Ok(())
     })
@@ -87,58 +117,73 @@ pub fn serve(key: Secret, allow: IpAddr, target: SocketAddr) -> io::Result<Liste
 /// The host's end: accepts plain connections on loopback and carries each
 /// to the worker at `remote`, sealed.
 pub fn forward(key: Secret, remote: SocketAddr) -> io::Result<Listener> {
-    listen(Ipv4Addr::LOCALHOST, move |local, open| {
+    listen(Ipv4Addr::LOCALHOST, move |local, conns| {
         let sealed = TcpStream::connect_timeout(&remote, CONNECT_WAIT)?;
         let _ = sealed.set_nodelay(true);
-        open.lock().unwrap().push(sealed.try_clone()?);
+        conns.keep(&sealed)?;
         let (send, recv) = offer_handshake(&sealed, &key)?;
         pipe(sealed, local, send, recv);
         Ok(())
     })
 }
 
-type Open = Arc<Mutex<Vec<TcpStream>>>;
+/// Proves the worker's tunnel at `remote` is reachable from here and lets
+/// this machine in, without anything reaching its RPC server: the worker
+/// only opens that once a sealed frame arrives, and this sends none.
+pub fn probe(key: Secret, remote: SocketAddr) -> io::Result<()> {
+    let stream = TcpStream::connect_timeout(&remote, CONNECT_WAIT)?;
+    let result = offer_handshake(&stream, &key).map(|_| ()).map_err(|e| match e.kind() {
+        io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionReset => {
+            io::Error::other("it turned this machine away")
+        }
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => io::Error::other("it didn't answer"),
+        _ => e,
+    });
+    let _ = stream.shutdown(Shutdown::Both);
+    result
+}
 
 fn listen(
     on: Ipv4Addr,
-    handle: impl Fn(TcpStream, &Open) -> io::Result<()> + Send + Sync + 'static,
+    handle: impl Fn(TcpStream, &Conns) -> io::Result<()> + Send + Sync + 'static,
 ) -> io::Result<Listener> {
     let listener = TcpListener::bind((on, 0))?;
     listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();
-    let closed = Arc::new(AtomicBool::new(false));
-    let open: Open = Arc::default();
+    let conns: Arc<Conns> = Arc::default();
     let handle = Arc::new(handle);
     {
-        let (closed, open) = (closed.clone(), open.clone());
+        let conns = conns.clone();
         thread::spawn(move || {
-            while !closed.load(Ordering::SeqCst) {
+            while !conns.closed.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        let full = conns.open.lock().unwrap().len() >= MAX_OPEN;
+                        if full || conns.keep(&stream).is_err() {
+                            let _ = stream.shutdown(Shutdown::Both);
+                            continue;
+                        }
                         let _ = stream.set_nonblocking(false);
                         let _ = stream.set_nodelay(true);
-                        if let Ok(copy) = stream.try_clone() {
-                            open.lock().unwrap().push(copy);
-                        }
-                        let (handle, open) = (handle.clone(), open.clone());
+                        let (handle, conns) = (handle.clone(), conns.clone());
                         thread::spawn(move || {
                             let copy = stream.try_clone();
-                            if handle(stream, &open).is_err()
-                                && let Ok(s) = copy
-                            {
+                            // Finished, refused or failed: either way it's over,
+                            // and the copy kept above mustn't hold it open.
+                            let _ = handle(stream, &conns);
+                            if let Ok(s) = copy {
                                 let _ = s.shutdown(Shutdown::Both);
                             }
                         });
                     }
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => thread::sleep(ACCEPT_POLL),
                     Err(_) => thread::sleep(ACCEPT_POLL),
                 }
                 // Forget connections that have closed.
-                open.lock().unwrap().retain(|s| s.peer_addr().is_ok());
+                conns.open.lock().unwrap().retain(|s| s.peer_addr().is_ok());
             }
         });
     }
-    Ok(Listener { port, closed, open })
+    Ok(Listener { port, conns })
 }
 
 /// One direction's key and frame counter.
@@ -213,7 +258,7 @@ fn accept_handshake(stream: &TcpStream, key: &Secret) -> io::Result<(Seal, Seal)
     getrandom::fill(&mut worker).map_err(|e| io::Error::other(e.to_string()))?;
     s.write_all(&worker)?;
     let (up, down) = keys(key, &hello[MAGIC.len()..], &worker);
-    // The host's first frame must come soon too; after it, RPC may idle.
+    // The read timeout stays: the host's first frame must come soon too.
     Ok((down, up))
 }
 
@@ -226,9 +271,7 @@ fn read_frame(stream: &mut TcpStream, seal: &mut Seal) -> io::Result<Vec<u8>> {
     }
     let mut sealed = vec![0u8; len];
     stream.read_exact(&mut sealed)?;
-    let plain = seal.open(&sealed)?;
-    let _ = stream.set_read_timeout(None);
-    Ok(plain)
+    seal.open(&sealed)
 }
 
 fn write_frame(stream: &mut TcpStream, seal: &mut Seal, plain: &[u8]) -> io::Result<()> {
@@ -375,9 +418,46 @@ mod tests {
         let (mut up, mut down) = keys(&key, &[1; 32], &[2; 32]);
         let sealed = up.seal(b"hello").unwrap();
         assert!(down.open(&sealed).is_err());
-        let (_, mut fresh_down) = keys(&key, &[1; 32], &[3; 32]);
-        let (mut up_again, _) = keys(&key, &[1; 32], &[3; 32]);
-        let other = up_again.seal(b"hello").unwrap();
-        assert!(fresh_down.open(&other).is_err());
+    }
+
+    #[test]
+    fn frames_cannot_be_replayed_across_connections() {
+        let key = secret();
+        // The same direction under the same pool key, one nonce apart.
+        let (mut first, _) = keys(&key, &[1; 32], &[2; 32]);
+        let (mut second, _) = keys(&key, &[1; 32], &[3; 32]);
+        let sealed = first.seal(b"hello").unwrap();
+        assert!(second.open(&sealed).is_err());
+        // Whereas the right connection opens it, which shows the test can fail.
+        let (_, mut worker_recv) = {
+            let (up, down) = keys(&key, &[1; 32], &[2; 32]);
+            (down, up)
+        };
+        assert_eq!(worker_recv.open(&sealed).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn a_probe_reaches_the_tunnel_but_not_the_rpc_server() {
+        let key = secret();
+        let rpc = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        rpc.set_nonblocking(true).unwrap();
+        let worker = serve(key, IpAddr::V4(Ipv4Addr::LOCALHOST), rpc.local_addr().unwrap()).unwrap();
+        probe(key, SocketAddr::from((Ipv4Addr::LOCALHOST, worker.port))).unwrap();
+        thread::sleep(Duration::from_millis(200));
+        assert!(rpc.accept().is_err(), "a probe must not reach the RPC server");
+    }
+
+    #[test]
+    fn a_probe_from_the_wrong_address_is_turned_away() {
+        let key = secret();
+        let worker = serve(key, IpAddr::V4(Ipv4Addr::new(10, 255, 255, 1)), echo()).unwrap();
+        let error = probe(key, SocketAddr::from((Ipv4Addr::LOCALHOST, worker.port))).unwrap_err();
+        assert!(error.to_string().contains("turned this machine away"), "{error}");
+    }
+
+    #[test]
+    fn a_probe_to_nothing_fails() {
+        let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap().local_addr().unwrap().port();
+        assert!(probe(secret(), SocketAddr::from((Ipv4Addr::LOCALHOST, port))).is_err());
     }
 }
