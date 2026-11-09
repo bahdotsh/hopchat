@@ -459,14 +459,14 @@ impl Home {
             Wire::Join { id, group, model, key } => self.pool_join(peer, id, group, model, key),
             Wire::Ready { id, port, mem } => {
                 let Some(h) = self.pools.hosting.as_mut().filter(|h| h.id == id) else { return };
+                // Only a first answer while gathering counts. A repeat from a
+                // member changes nothing, and anyone let go at launch was
+                // already told to leave.
                 let Some(m) = h.members.iter_mut().find(|m| m.address == peer.address) else { return };
-                if h.phase != Phase::Gathering {
-                    // Too late for this pool; let it go.
-                    let _ = self.engine.send(Input::Ui(Command::PoolSend { to: peer.address, wire: Wire::Leave { id } }));
-                    return;
+                if h.phase == Phase::Gathering && m.ready.is_none() && !m.refused {
+                    m.ready = Some((port, mem));
+                    self.pool_launch_if_answered();
                 }
-                m.ready = Some((port, mem));
-                self.pool_launch_if_answered();
             }
             Wire::Refuse { id, error } => {
                 let Some(h) = self.pools.hosting.as_mut().filter(|h| h.id == id) else { return };
@@ -480,11 +480,14 @@ impl Home {
                     self.pool_stop_serving(false);
                     self.note(format!("pool: {} ended their pool", peer.who));
                 }
-                let left = self.pools.hosting.as_ref().is_some_and(|h| {
-                    h.id == id && h.members.iter().any(|m| m.address == peer.address && m.ready.is_some())
-                });
-                if left {
+                let Some(h) = self.pools.hosting.as_mut().filter(|h| h.id == id) else { return };
+                let Some(m) = h.members.iter_mut().find(|m| m.address == peer.address) else { return };
+                if m.ready.is_some() {
                     self.pool_stop_hosting(Some(format!("{} left", peer.who)));
+                } else {
+                    // Said no before answering: don't wait for it.
+                    m.refused = true;
+                    self.pool_launch_if_answered();
                 }
             }
             Wire::Give { .. } | Wire::Keep => {}
@@ -634,7 +637,7 @@ impl Home {
         let Some(h) = self.pools.hosting.as_mut() else { return };
         h.phase = Phase::Connecting;
         // Whoever didn't answer in time is let go.
-        for m in h.members.iter().filter(|m| m.ready.is_none()) {
+        for m in h.members.iter().filter(|m| m.ready.is_none() && !m.refused) {
             let _ = self.engine.send(Input::Ui(Command::PoolSend { to: m.address.clone(), wire: Wire::Leave { id: h.id.clone() } }));
         }
         h.members.retain(|m| m.ready.is_some());

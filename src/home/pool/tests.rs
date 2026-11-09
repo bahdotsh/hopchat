@@ -357,3 +357,32 @@ fn stopping_while_loading_stops_llama_server() {
     }
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn a_repeated_ready_doesnt_drop_a_member() {
+    let root = scratch("pool-repeat");
+    let mut hank = hosting(&root);
+    let id = hank.home.pools.hosting.as_ref().unwrap().id.clone();
+    let ready = Wire::Ready { id, port: 9, mem: 8 << 30 };
+    // gina is the only giver, so her answer launches the pool.
+    hank.home.handle(Request::PoolWire { peer: peer("gina"), wire: ready.clone() });
+    assert_eq!(hank.home.pools.hosting.as_ref().unwrap().phase, Phase::Connecting);
+    hank.home.handle(Request::PoolWire { peer: peer("gina"), wire: ready });
+    let h = hank.home.pools.hosting.as_ref().unwrap();
+    assert!(matches!(h.members.as_slice(), [m] if m.address == "gina" && m.ready.is_some()));
+    assert!(sent(&hank).is_empty(), "a member still in the pool mustn't be told to leave");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_giver_leaving_before_answering_isnt_waited_for() {
+    let root = scratch("pool-leave");
+    let mut hank = hosting(&root);
+    let id = hank.home.pools.hosting.as_ref().unwrap().id.clone();
+    hank.home.handle(Request::PoolWire { peer: peer("gina"), wire: Wire::Leave { id } });
+    // The only giver said no, so the pool ends now, not in 20 seconds,
+    // and she isn't told to leave a pool she already left.
+    assert!(hank.home.pools.hosting.is_none());
+    assert!(!sent(&hank).iter().any(|(_, w)| matches!(w, Wire::Leave { .. })));
+    let _ = fs::remove_dir_all(root);
+}
