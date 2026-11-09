@@ -35,7 +35,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub use llama::{memory, size};
+pub use llama::{memory, ram, size};
 use llama::{LLAMA_SERVERS, RPC_SERVERS};
 
 use super::ai::{MENTION as AI, SIGNATURE as AI_SIGNATURE};
@@ -315,9 +315,9 @@ impl Home {
                 "this group"
             };
             return format!(
-                "pools started in {place} may use your machine ({} of memory). \
+                "pools started in {place} may use your machine ({}). \
                  Their host can run computations on it through llama.cpp; give only where you trust everyone",
-                size(memory())
+                ram(memory())
             );
         }
         let stop = match group {
@@ -335,10 +335,9 @@ impl Home {
         if stop {
             self.pool_stop_serving(true);
         }
-        match (group, self.config.pool_groups.len()) {
-            (_, 0) => "your machine doesn't join pools now".into(),
-            (Some(_), n) => format!("pools started here can't use your machine now; you still give in {n} other conversation(s)"),
-            (None, _) => unreachable!("off everywhere clears every group"),
+        match self.config.pool_groups.len() {
+            0 => "your machine doesn't join pools now".into(),
+            n => format!("pools started here can't use your machine now; you still give in {n} other conversation(s)"),
         }
     }
 
@@ -368,7 +367,7 @@ impl Home {
             (false, n) => format!("giving in {n} other conversation(s), not here"),
         });
         if !self.pools.givers.is_empty() {
-            let givers: Vec<String> = self.pools.givers.iter().map(|(nick, mem)| format!("{nick} ({})", size(*mem))).collect();
+            let givers: Vec<String> = self.pools.givers.iter().map(|(nick, mem)| format!("{nick} ({})", ram(*mem))).collect();
             parts.push(format!("givers: {}", givers.join(", ")));
         }
         let cached = llama::size_of(&self.path_of(CACHE));
@@ -443,7 +442,7 @@ impl Home {
             return self.note("pool: nobody here gives their machine to pools yet; they can say /pool give on here".into());
         }
         h.phase = Phase::Gathering;
-        let names: Vec<String> = h.members.iter().map(|m| format!("{} ({})", m.nick, size(m.mem))).collect();
+        let names: Vec<String> = h.members.iter().map(|m| format!("{} ({})", m.nick, ram(m.mem))).collect();
         let text = format!("pool: asking {} to pool {} with you…", names.join(", "), h.model);
         let me = self.me.clone();
         thread::spawn(move || {
@@ -712,7 +711,7 @@ impl Home {
         h.server = Some(process.clone());
         h.url = Some(url.clone());
         h.started = Instant::now();
-        let names: Vec<String> = h.members.iter().map(|m| format!("{} ({})", m.nick, size(m.ready.map_or(0, |r| r.1)))).collect();
+        let names: Vec<String> = h.members.iter().map(|m| format!("{} ({})", m.nick, ram(m.ready.map_or(0, |r| r.1)))).collect();
         let (group, model) = (h.group.clone(), h.model.clone());
         let me = self.me.clone();
         thread::spawn(move || {
@@ -735,7 +734,7 @@ impl Home {
                 // Only the host's GPU holds layers, not its main memory, so
                 // its share isn't counted as a number it may not have given.
                 let names: Vec<String> =
-                    h.members.iter().map(|m| format!("{} ({})", m.nick, size(m.ready.map_or(0, |r| r.1)))).collect();
+                    h.members.iter().map(|m| format!("{} ({})", m.nick, ram(m.ready.map_or(0, |r| r.1)))).collect();
                 let text = format!(
                     "{} is ready, pooled across this machine and {}. Mention {AI} to ask it.",
                     h.model,

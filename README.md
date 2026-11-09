@@ -325,8 +325,8 @@ Only one person in a group needs to run a model.
 ```
 alice> /pool give on
 bob>   /pool start qwen2.5:72b
-🤖 is loading qwen2.5:72b across this machine and alice (16 GB), carol (32 GB). This can take a few minutes.
-🤖 qwen2.5:72b is ready, pooled across this machine and alice (16 GB), carol (32 GB). Mention @ai to ask it.
+🤖 is loading qwen2.5:72b across this machine and alice (16 GB RAM), carol (32 GB RAM). This can take a few minutes.
+🤖 qwen2.5:72b is ready, pooled across this machine and alice (16 GB RAM), carol (32 GB RAM). Mention @ai to ask it.
 ```
 
 A model too big for any one laptop can run across several. The model's layers are split across the host's GPU, when it has one, and every giver, in proportion to the free memory llama.cpp sees on each, using llama.cpp's [RPC backend](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc). On a host without a GPU, the givers hold nearly all of the model.

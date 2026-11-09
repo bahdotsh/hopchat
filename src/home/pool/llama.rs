@@ -279,6 +279,12 @@ pub fn size(bytes: u64) -> String {
     format!("{} GB", (bytes as f64 / (1u64 << 30) as f64).round() as u64)
 }
 
+/// A machine's memory as "16 GB RAM". It is all the machine has, not what
+/// is free: llama.cpp splits layers by what it finds free when it loads.
+pub fn ram(bytes: u64) -> String {
+    format!("{} RAM", size(bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,5 +391,6 @@ mod tests {
     fn sizes_read_like_people_say_them() {
         assert_eq!(size(17_179_869_184), "16 GB");
         assert_eq!(size(0), "? GB");
+        assert_eq!(ram(17_179_869_184), "16 GB RAM");
     }
 }
