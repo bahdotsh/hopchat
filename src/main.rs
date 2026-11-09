@@ -143,6 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ai_on,
         };
         headless(&me, update_rx, input_tx, home_tx, script);
+        home::pool::stop_all();
         return Ok(());
     }
 
@@ -160,6 +161,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = app.run(&mut terminal, update_rx, input_tx);
     disable_extras();
     ratatui::restore();
+    home::pool::stop_all();
     result?;
     Ok(())
 }

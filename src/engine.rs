@@ -97,6 +97,15 @@ pub enum Command {
         id: String,
         result: Result<serde_json::Value, String>,
     },
+    /// Whether this machine gives its memory to pools, and how much.
+    PoolGive(Option<u64>),
+    /// A hidden pool message for `to`.
+    PoolSend { to: String, wire: home::pool::Wire },
+    /// The givers in `group` this machine is directly connected to.
+    PoolGivers {
+        group: String,
+        reply: Sender<Vec<home::pool::Giver>>,
+    },
 }
 
 /// What the engine tells the UI.
@@ -225,6 +234,10 @@ pub struct Engine {
     lenders: HashMap<String, String>,
     /// Borrowed turns waiting for their lender, by request id.
     borrows: HashMap<String, Borrow>,
+    /// The memory this machine gives to pools, when it gives.
+    giving: Option<u64>,
+    /// Peers who give to pools, and how much memory.
+    givers: HashMap<String, u64>,
 }
 
 struct Borrow {
@@ -312,6 +325,8 @@ pub fn open(
             address,
             offer: None,
             lenders: HashMap::new(),
+            giving: None,
+            givers: HashMap::new(),
             borrows: HashMap::new(),
         },
         me,
@@ -418,6 +433,7 @@ impl Engine {
                 });
                 if restored {
                     self.offer_to(&address);
+                    self.give_to(&address);
                     self.update(Update::SessionReady { address });
                 }
             }
@@ -487,6 +503,33 @@ impl Engine {
                     Err(error) => home::lend::Wire::Fail { id, error },
                 };
                 self.send_hidden(&to, &wire);
+            }
+            Input::Ui(Command::PoolGive(mem)) => {
+                if mem != self.giving {
+                    self.giving = mem;
+                    let peers: Vec<String> = self.streams.keys().cloned().collect();
+                    for peer in peers {
+                        self.give_to(&peer);
+                    }
+                }
+            }
+            Input::Ui(Command::PoolSend { to, wire }) => self.send_pool(&to, &wire),
+            Input::Ui(Command::PoolGivers { group, reply }) => {
+                let mut givers: Vec<home::pool::Giver> = self
+                    .givers
+                    .iter()
+                    .filter(|(address, _)| {
+                        **address != self.address && self.shares(&group, address) && self.session_ready(address)
+                    })
+                    .map(|(address, mem)| home::pool::Giver {
+                        address: address.clone(),
+                        nick: self.nick_or_address(address),
+                        mem: *mem,
+                        ip: self.ip_of(address),
+                    })
+                    .collect();
+                givers.sort_by(|a, b| a.address.cmp(&b.address));
+                let _ = reply.send(givers);
             }
         }
     }
@@ -667,6 +710,74 @@ impl Engine {
             None => home::lend::Wire::Gone,
         };
         self.send_hidden(peer, &wire);
+    }
+
+    // ----- pools (see home::pool) -------------------------------------------
+
+    fn send_pool(&mut self, to: &str, wire: &home::pool::Wire) {
+        if let Err(e) = self.protocol.send_message_with(to, wire.encode(), SendMessageOptions::default()) {
+            self.error(format!("pool message to {}: {e}", self.nick_or_address(to)));
+        }
+    }
+
+    /// Tells `peer` whether this machine gives to pools.
+    fn give_to(&mut self, peer: &str) {
+        if !self.session_ready(peer) {
+            return;
+        }
+        let wire = match self.giving {
+            Some(mem) => home::pool::Wire::Give { mem },
+            None => home::pool::Wire::Keep,
+        };
+        self.send_pool(peer, &wire);
+    }
+
+    /// Where a directly connected peer's stream comes from.
+    fn ip_of(&self, address: &str) -> Option<std::net::IpAddr> {
+        self.streams.get(address)?.peer_addr().ok().map(|a| a.ip())
+    }
+
+    fn tell_home_givers(&self) {
+        if let Some(home) = &self.home {
+            let mut givers: Vec<String> = self
+                .givers
+                .iter()
+                .map(|(address, mem)| format!("{} ({})", self.nick_or_address(address), home::pool::size(*mem)))
+                .collect();
+            givers.sort();
+            let _ = home.send(home::Request::PoolGivers(givers));
+        }
+    }
+
+    /// A hidden pool message from `from`.
+    fn on_pool(&mut self, from: String, wire: home::pool::Wire) {
+        use home::pool::Wire;
+        match wire {
+            Wire::Give { mem } => {
+                self.givers.insert(from, mem);
+                self.tell_home_givers();
+            }
+            Wire::Keep => {
+                if self.givers.remove(&from).is_some() {
+                    self.tell_home_givers();
+                }
+            }
+            Wire::Join { ref id, ref group, .. } if !self.shares(group, &from) => {
+                let refuse = Wire::Refuse { id: id.clone(), error: "isn't in that group with you".into() };
+                self.send_pool(&from, &refuse);
+            }
+            wire => match &self.home {
+                Some(home) => {
+                    let (who, ip) = (self.nick_or_address(&from), self.ip_of(&from));
+                    let _ = home.send(home::Request::PoolWire { from, who, ip, wire });
+                }
+                None => {
+                    if let Wire::Join { id, .. } = wire {
+                        self.send_pool(&from, &Wire::Refuse { id, error: "isn't running home".into() });
+                    }
+                }
+            },
+        }
     }
 
     fn nick_or_address(&self, address: &str) -> String {
@@ -886,6 +997,13 @@ impl Engine {
         if self.lenders.remove(address).is_some() {
             self.tell_home_lenders();
         }
+        if self.givers.remove(address).is_some() {
+            self.tell_home_givers();
+        }
+        if let Some(home) = &self.home {
+            let who = self.nick_or_address(address);
+            let _ = home.send(home::Request::PoolPeerGone { address: address.to_string(), who });
+        }
         let gone: Vec<String> = self
             .borrows
             .iter()
@@ -917,6 +1035,12 @@ impl Engine {
             if let Some(wire) = home::lend::Wire::decode(&message.content) {
                 if let Some(wire) = wire {
                     self.on_wire(message.sender.as_str().to_string(), wire);
+                }
+                continue;
+            }
+            if let Some(wire) = home::pool::Wire::decode(&message.content) {
+                if let Some(wire) = wire {
+                    self.on_pool(message.sender.as_str().to_string(), wire);
                 }
                 continue;
             }
@@ -982,6 +1106,7 @@ impl Engine {
             Event::SecureSessionEstablished { ref peer_id, .. } => {
                 let address = peer_id.clone();
                 self.offer_to(&address);
+                self.give_to(&address);
                 self.update(Update::SessionReady { address });
             }
             Event::GroupMessageReceived {

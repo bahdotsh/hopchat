@@ -1695,6 +1695,13 @@ impl App {
                     args: format!("ai {arg}"),
                 });
             }
+            "pool" => {
+                let group = self.selected.clone().filter(|_| self.in_group());
+                let _ = self.home.send(home::Request::Configure {
+                    group,
+                    args: format!("pool {arg}"),
+                });
+            }
             "todo" | "todos" | "tasks" | "task" | "remind" | "reminders" | "reminder" if arg.is_empty() => {
                 self.open_tasks()
             }

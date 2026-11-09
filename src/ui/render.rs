@@ -61,6 +61,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/devices", "find, pair and test your smart devices (also Ctrl-D)"),
     ("/home", "/home on|off lets everyone here use your devices (you always can) · /home add IP"),
     ("/ai", "/ai on|off lets everyone here ask your model (you always can) · /ai share on|off lends it"),
+    ("/pool", "run one big model across everyone's machines · /pool start MODEL · /pool give on|off · /pool stop"),
     ("/me", "show and copy your own address"),
     ("/clear", "delete this conversation from this device"),
     ("/log", "show or hide the protocol event log"),

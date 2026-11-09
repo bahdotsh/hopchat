@@ -72,6 +72,8 @@ pub enum Borrowed {
 pub struct Mind {
     pub local: Ollama,
     pub local_ready: bool,
+    /// The pooled model this machine hosts, once it's loaded (see `pool`).
+    pub pool: Option<String>,
     pub engine: Sender<Input>,
     pub group: String,
 }
@@ -84,6 +86,22 @@ pub struct Thought {
 
 impl Mind {
     pub fn think(&self, messages: &[Value], tools: Option<&Value>) -> Result<Thought, String> {
+        // The pool writes plain answers; a turn that drives devices stays
+        // with a model that has been asked to call tools before.
+        let mut pool_error = None;
+        if let Some(url) = self.pool.as_ref().filter(|_| tools.is_none()) {
+            match super::pool::ask(url, messages) {
+                Ok(message) => return Ok(Thought { message, by: None }),
+                Err(e) => pool_error = Some(e),
+            }
+        }
+        self.think_alone(messages, tools).map_err(|e| match pool_error {
+            Some(p) => format!("{p}; {e}"),
+            None => e,
+        })
+    }
+
+    fn think_alone(&self, messages: &[Value], tools: Option<&Value>) -> Result<Thought, String> {
         let local_error = if self.local_ready {
             match self.local.raw(messages, tools) {
                 Ok(message) => return Ok(Thought { message, by: None }),
