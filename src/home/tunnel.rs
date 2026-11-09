@@ -456,6 +456,28 @@ mod tests {
     }
 
     #[test]
+    fn frames_of_a_wrong_size_are_refused() {
+        let key = secret();
+        // Both ends of the host-to-worker direction.
+        let (mut send, _) = keys(&key, &[1; 32], &[2; 32]);
+        let (mut recv, _) = keys(&key, &[1; 32], &[2; 32]);
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let mut writer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut reader, _) = listener.accept().unwrap();
+        // Too short to hold a tag, and too long for a chunk.
+        for len in [TAG as u32 - 1, (CHUNK + TAG) as u32 + 1] {
+            writer.write_all(&len.to_be_bytes()).unwrap();
+            let error = read_frame(&mut reader, &mut recv).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        }
+        // Whereas the biggest frame there is gets through whole.
+        let big = vec![7u8; CHUNK];
+        let writing = thread::spawn(move || write_frame(&mut writer, &mut send, &big));
+        assert_eq!(read_frame(&mut reader, &mut recv).unwrap(), vec![7u8; CHUNK]);
+        writing.join().unwrap().unwrap();
+    }
+
+    #[test]
     fn a_probe_to_nothing_fails() {
         let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap().local_addr().unwrap().port();
         assert!(probe(secret(), SocketAddr::from((Ipv4Addr::LOCALHOST, port))).is_err());
