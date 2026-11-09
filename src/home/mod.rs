@@ -1141,6 +1141,11 @@ impl Home {
         let tools = tools.as_array().filter(|t| !t.is_empty()).map(|_| tools.clone());
         let pool = self.pools.answerer(tools.as_ref());
         if pool.is_none() && self.model_state != ModelState::Ready {
+            // The pooled model is offered for plain answers; a turn that
+            // calls tools needs Ollama, so the borrower should try elsewhere.
+            if self.pools.url().is_some() {
+                return refuse("its pooled model only writes plain answers, and its own model isn't ready");
+            }
             return refuse("its model isn't ready");
         }
         if self.lending.load(Ordering::SeqCst) >= MAX_LENDING {

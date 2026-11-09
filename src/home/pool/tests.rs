@@ -1,3 +1,4 @@
+use super::super::ModelState;
 use super::*;
 use crate::engine::Update;
 use std::fs;
@@ -628,4 +629,36 @@ fn asking_the_pool_says_what_went_wrong() {
     assert_eq!(ask(&empty, &hi).unwrap_err(), "the pool sent no message");
     let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap().local_addr().unwrap().port();
     assert_eq!(ask(&format!("http://127.0.0.1:{port}"), &hi).unwrap_err(), "can't reach the pool's llama-server");
+}
+
+#[test]
+fn a_pool_lends_plain_answers_and_turns_away_tool_turns() {
+    let root = scratch("pool-lend");
+    let mut hank = side(&root, "hank", &root);
+    ready(&mut hank, &llama_http(200, r#"{"choices":[{"message":{"content":"pooled hi"}}]}"#));
+    assert!(hank.home.model_state != ModelState::Ready);
+    let lend = |id: &str, tools: Value| Request::Lend {
+        to: "bob".into(),
+        who: "bob".into(),
+        id: id.into(),
+        messages: vec![json!({"role": "user", "content": "hi"})],
+        tools,
+    };
+    let answer = |side: &Side| loop {
+        match side.engine.recv_timeout(Duration::from_secs(5)).expect("no answer to the borrower") {
+            Input::Ui(Command::Lend { id, result, .. }) => break (id, result),
+            _ => continue,
+        }
+    };
+
+    hank.home.handle(lend("tools", json!([{"type": "function"}])));
+    let (id, result) = answer(&hank);
+    assert_eq!(id, "tools");
+    assert!(result.unwrap_err().contains("only writes plain answers"));
+
+    hank.home.handle(lend("plain", Value::Null));
+    let (id, result) = answer(&hank);
+    assert_eq!(id, "plain");
+    assert_eq!(result.unwrap()["content"], "pooled hi");
+    let _ = fs::remove_dir_all(root);
 }
