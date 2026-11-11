@@ -472,14 +472,28 @@ impl Home {
         match wire {
             Wire::Join { id, group, model, key } => self.pool_join(peer, id, group, model, key),
             Wire::Ready { id, port, mem } => {
-                let Some(h) = self.pools.hosting.as_mut().filter(|h| h.id == id) else { return };
-                // Only a first answer while gathering counts. A repeat from a
-                // member changes nothing, and anyone let go at launch was
-                // already told to leave.
-                let Some(m) = h.members.iter_mut().find(|m| m.address == peer.address) else { return };
-                if h.phase == Phase::Gathering && m.ready.is_none() && !m.refused {
-                    m.ready = Some((port, mem));
-                    self.pool_launch_if_answered();
+                // Only a first answer while gathering counts, and a repeat
+                // from a member changes nothing. Any other answer is from a
+                // giver this pool isn't using: its invitation reached it
+                // late (one sent as it dropped off is delivered when it
+                // comes back), after the pool ended or went on without it.
+                // It started a worker for nothing and would keep it, and
+                // turn other pools away, until told to leave.
+                let member = self
+                    .pools
+                    .hosting
+                    .as_mut()
+                    .filter(|h| h.id == id)
+                    .and_then(|h| h.members.iter_mut().find(|m| m.address == peer.address).map(|m| (h.phase == Phase::Gathering, m)));
+                match member {
+                    Some((true, m)) if m.ready.is_none() && !m.refused => {
+                        m.ready = Some((port, mem));
+                        self.pool_launch_if_answered();
+                    }
+                    Some((_, m)) if m.ready.is_some() => {}
+                    _ => {
+                        let _ = self.engine.send(Input::Ui(Command::PoolSend { to: peer.address, wire: Wire::Leave { id } }));
+                    }
                 }
             }
             Wire::Refuse { id, error } => {
