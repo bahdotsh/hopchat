@@ -197,7 +197,9 @@ fn only_those_asked_can_answer_and_a_vanished_giver_isnt_waited_for() {
     let h = hank.home.pools.hosting.as_ref().unwrap();
     assert_eq!(h.phase, Phase::Gathering);
     assert!(h.members.iter().all(|m| m.address == "gina" && m.ready.is_none()));
-    assert!(sent(&hank).is_empty());
+    // They are told so, in case they started a worker for it.
+    let told = sent(&hank);
+    assert!(matches!(told.as_slice(), [(to, Wire::Leave { .. })] if to == "mallory"), "{told:?}");
 
     // The only giver drops off before answering: the pool ends now, not in 20 seconds.
     hank.home.handle(Request::PoolPeerGone { address: "gina".into(), who: "gina".into() });
@@ -425,6 +427,74 @@ fn whoever_hasnt_answered_when_time_is_up_is_let_go() {
     assert!(matches!(h.members.as_slice(), [m] if m.address == "gina"));
     let told = sent(&hank);
     assert!(matches!(told.as_slice(), [(to, Wire::Leave { .. })] if to == "ivy"), "{told:?}");
+    let _ = fs::remove_dir_all(root);
+}
+
+/// An invitation sent as a giver dropped off reaches it when it comes back,
+/// and it starts a worker and answers. A host that said nothing would leave
+/// it helping a pool that isn't using it, turning every other pool away.
+#[test]
+fn a_giver_answering_a_pool_that_isnt_using_it_is_told_to_leave() {
+    let root = scratch("pool-stale");
+    let ready = |id: &str| Wire::Ready { id: id.into(), port: 9, mem: 8 << 30 };
+    let left = |told: &[(String, Wire)], who: &str, pool: &str| {
+        matches!(told, [(to, Wire::Leave { id })] if to == who && id == pool)
+    };
+
+    // No pool here any more.
+    let mut hank = side(&root, "idle", &root);
+    hank.home.handle(Request::PoolWire { peer: peer("gina"), wire: ready("gone") });
+    let told = sent(&hank);
+    assert!(left(&told, "gina", "gone"), "{told:?}");
+
+    // Another pool than the one running, and someone this pool never asked.
+    let mut hank = hosting_with(&root, vec![giver("gina", peer("gina").ip), giver("ivy", peer("ivy").ip)]);
+    let _ = sent(&hank);
+    let id = hank.home.pools.hosting.as_ref().unwrap().id.clone();
+    hank.home.handle(Request::PoolWire { peer: peer("gina"), wire: ready("gone") });
+    let told = sent(&hank);
+    assert!(left(&told, "gina", "gone"), "{told:?}");
+    hank.home.handle(Request::PoolWire { peer: peer("mallory"), wire: ready(&id) });
+    let told = sent(&hank);
+    assert!(left(&told, "mallory", &id), "{told:?}");
+
+    // Lost while gathering, so no longer waited for, then back and answering.
+    hank.home.handle(Request::PoolPeerGone { address: "ivy".into(), who: "ivy".into() });
+    hank.home.handle(Request::PoolWire { peer: peer("ivy"), wire: ready(&id) });
+    let told = sent(&hank);
+    assert!(left(&told, "ivy", &id), "{told:?}");
+    let h = hank.home.pools.hosting.as_ref().unwrap();
+    assert_eq!(h.phase, Phase::Gathering, "gina may still answer");
+
+    // The pool went on without ivy; her answer after that changes nothing in it.
+    hank.home.handle(Request::PoolWire { peer: peer("gina"), wire: ready(&id) });
+    assert_eq!(hank.home.pools.hosting.as_ref().unwrap().phase, Phase::Connecting);
+    assert!(sent(&hank).is_empty());
+    hank.home.handle(Request::PoolWire { peer: peer("ivy"), wire: ready(&id) });
+    let told = sent(&hank);
+    assert!(left(&told, "ivy", &id), "{told:?}");
+    let h = hank.home.pools.hosting.as_ref().unwrap();
+    assert!(matches!(h.members.as_slice(), [m] if m.address == "gina"));
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The giver's half of the same story: told to leave, it stops its worker.
+#[test]
+fn a_giver_told_to_leave_stops_its_worker() {
+    let root = scratch("pool-stale-giver");
+    let mut gina = helping(&root);
+    let rpc = gina.home.pools.serving.as_ref().unwrap().rpc.clone();
+    // Not from the pool's host: nothing happens.
+    gina.home.handle(Request::PoolWire { peer: peer("mallory"), wire: Wire::Leave { id: "p1".into() } });
+    assert!(gina.home.pools.serving.is_some());
+    gina.home.handle(Request::PoolWire { peer: peer("hank"), wire: Wire::Leave { id: "p1".into() } });
+    assert!(gina.home.pools.serving.is_none());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while rpc.exited().is_none() {
+        assert!(Instant::now() < deadline, "the worker outlived the pool it was told to leave");
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(sent(&gina).is_empty(), "the host already knows");
     let _ = fs::remove_dir_all(root);
 }
 
