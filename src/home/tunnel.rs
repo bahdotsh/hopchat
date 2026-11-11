@@ -67,35 +67,61 @@ impl Drop for Listener {
 #[derive(Default)]
 struct Conns {
     closed: AtomicBool,
-    open: Mutex<Vec<TcpStream>>,
+    /// Each with the connection it belongs to.
+    open: Mutex<Vec<(u64, TcpStream)>>,
 }
 
 impl Conns {
     fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
-        for stream in self.open.lock().unwrap().drain(..) {
+        for (_, stream) in self.open.lock().unwrap().drain(..) {
             let _ = stream.shutdown(Shutdown::Both);
         }
     }
 
-    /// Holds a copy of `stream` so closing the listener closes it too.
-    /// Checked under the same lock `close` drains with, so a stream kept
-    /// while the listener closes is shut rather than missed.
-    fn keep(&self, stream: &TcpStream) -> io::Result<()> {
+    /// Holds a copy of `stream` for connection `id` so closing the listener
+    /// closes it too. Checked under the same lock `close` drains with, so a
+    /// stream kept while the listener closes is shut rather than missed.
+    fn keep(&self, id: u64, stream: &TcpStream) -> io::Result<()> {
         let mut open = self.open.lock().unwrap();
         if self.closed.load(Ordering::SeqCst) {
             let _ = stream.shutdown(Shutdown::Both);
             return Err(io::Error::other("pool tunnel closed"));
         }
-        open.push(stream.try_clone()?);
+        open.push((id, stream.try_clone()?));
         Ok(())
+    }
+
+    /// Connection `id` is over: shuts and lets go of every stream kept for
+    /// it. The socket itself can't be asked whether it has closed: one the
+    /// other end closed first still names its peer.
+    fn forget(&self, id: u64) {
+        self.open.lock().unwrap().retain(|(of, stream)| {
+            if *of == id {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+            *of != id
+        });
+    }
+}
+
+/// One accepted connection, as its handler sees the listener.
+struct Conn<'a> {
+    conns: &'a Conns,
+    id: u64,
+}
+
+impl Conn<'_> {
+    /// Holds a copy of a stream this connection opened (see [`Conns::keep`]).
+    fn keep(&self, stream: &TcpStream) -> io::Result<()> {
+        self.conns.keep(self.id, stream)
     }
 }
 
 /// The worker's end: accepts sealed connections from `allow` only, on any
 /// interface, and opens each onto `target` once it has proved the key.
 pub fn serve(key: Secret, allow: IpAddr, target: SocketAddr) -> io::Result<Listener> {
-    listen(Ipv4Addr::UNSPECIFIED, move |stream, conns| {
+    listen(Ipv4Addr::UNSPECIFIED, move |stream, conn| {
         if stream.peer_addr().ok().map(|a| a.ip()) != Some(allow) {
             return Ok(());
         }
@@ -112,7 +138,7 @@ pub fn serve(key: Secret, allow: IpAddr, target: SocketAddr) -> io::Result<Liste
         stream.set_read_timeout(None)?;
         let mut local = TcpStream::connect_timeout(&target, CONNECT_WAIT)?;
         let _ = local.set_nodelay(true);
-        conns.keep(&local)?;
+        conn.keep(&local)?;
         local.write_all(&first)?;
         pipe(stream, local, send, recv);
         Ok(())
@@ -122,10 +148,10 @@ pub fn serve(key: Secret, allow: IpAddr, target: SocketAddr) -> io::Result<Liste
 /// The host's end: accepts plain connections on loopback and carries each
 /// to the worker at `remote`, sealed.
 pub fn forward(key: Secret, remote: SocketAddr) -> io::Result<Listener> {
-    listen(Ipv4Addr::LOCALHOST, move |local, conns| {
+    listen(Ipv4Addr::LOCALHOST, move |local, conn| {
         let sealed = TcpStream::connect_timeout(&remote, CONNECT_WAIT)?;
         let _ = sealed.set_nodelay(true);
-        conns.keep(&sealed)?;
+        conn.keep(&sealed)?;
         let (send, recv) = offer_handshake(&sealed, &key)?;
         pipe(sealed, local, send, recv);
         Ok(())
@@ -171,7 +197,7 @@ fn probe_on(stream: &TcpStream, key: &Secret) -> io::Result<()> {
 
 fn listen(
     on: Ipv4Addr,
-    handle: impl Fn(TcpStream, &Conns) -> io::Result<()> + Send + Sync + 'static,
+    handle: impl Fn(TcpStream, &Conn) -> io::Result<()> + Send + Sync + 'static,
 ) -> io::Result<Listener> {
     let listener = TcpListener::bind((on, 0))?;
     listener.set_nonblocking(true)?;
@@ -181,11 +207,13 @@ fn listen(
     {
         let conns = conns.clone();
         thread::spawn(move || {
+            let mut id = 0u64;
             while !conns.closed.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        id += 1;
                         let full = conns.open.lock().unwrap().len() >= MAX_OPEN;
-                        if full || conns.keep(&stream).is_err() {
+                        if full || conns.keep(id, &stream).is_err() {
                             let _ = stream.shutdown(Shutdown::Both);
                             continue;
                         }
@@ -193,19 +221,14 @@ fn listen(
                         let _ = stream.set_nodelay(true);
                         let (handle, conns) = (handle.clone(), conns.clone());
                         thread::spawn(move || {
-                            let copy = stream.try_clone();
                             // Finished, refused or failed: either way it's over,
-                            // and the copy kept above mustn't hold it open.
-                            let _ = handle(stream, &conns);
-                            if let Ok(s) = copy {
-                                let _ = s.shutdown(Shutdown::Both);
-                            }
+                            // and the copies kept for it mustn't hold it open.
+                            let _ = handle(stream, &Conn { conns: &conns, id });
+                            conns.forget(id);
                         });
                     }
                     Err(_) => thread::sleep(ACCEPT_POLL),
                 }
-                // Forget connections that have closed.
-                conns.open.lock().unwrap().retain(|s| s.peer_addr().is_ok());
             }
         });
     }
@@ -436,6 +459,35 @@ mod tests {
         drop(worker);
         let _ = stream.write_all(b"ping");
         assert!(matches!(stream.read(&mut buf), Ok(0) | Err(_)));
+    }
+
+    /// llama-server opens a connection to each worker again and again over
+    /// a pool's life. Ones that have closed mustn't use up the listener,
+    /// whichever end closed them first.
+    #[test]
+    fn closed_connections_dont_fill_a_listener() {
+        let key = secret();
+        let (worker, at) = worker(key);
+        let host = forward(key, at).unwrap();
+        // A few at a time, so the listeners are never full of open ones.
+        for round in 0..MAX_OPEN / 4 {
+            thread::scope(|scope| {
+                for i in 0..8 {
+                    let port = host.port;
+                    scope.spawn(move || {
+                        let payload = format!("connection {round}.{i}");
+                        let back = round_trip(port, payload.as_bytes()).unwrap_or_else(|e| panic!("{payload}: {e}"));
+                        assert_eq!(back, payload.as_bytes());
+                    });
+                }
+            });
+        }
+        // And once they have all closed, nothing is still held for them.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !host.conns.open.lock().unwrap().is_empty() || !worker.conns.open.lock().unwrap().is_empty() {
+            assert!(std::time::Instant::now() < deadline, "closed connections are still held");
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]
